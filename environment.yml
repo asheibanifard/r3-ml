@@ -1,0 +1,47 @@
+name: r3-ml
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  # Python
+  - python=3.11
+
+  # PyTorch with CUDA support
+  - pytorch::pytorch
+  - pytorch::torchvision
+  - pytorch::torchaudio
+  - pytorch::pytorch-cuda
+
+  # Core ML/Data Science
+  - numpy>=1.24.0
+  - pandas>=2.0.0
+  - scikit-learn>=1.3.0
+  - matplotlib>=3.7.0
+  - seaborn>=0.12.0
+
+  # Development & Linting
+  - pylint>=3.0.0
+  - black>=23.0.0
+  - isort>=5.12.0
+  - pytest>=7.4.0
+  - pytest-cov>=4.1.0
+
+  # Jupyter & Notebooks
+  - jupyter
+  - jupyterlab>=4.0.0
+  - ipython>=8.0.0
+  - ipykernel>=6.25.0
+
+  # Utilities
+  - tqdm>=4.66.0
+  - pyyaml>=6.0
+
+  # Optional: Visualization & Monitoring
+  - tensorboard>=2.14.0
+
+  # pip packages (conda doesn't have everything)
+  - pip
+  - pip:
+    - python-dotenv>=1.0.0
+    - wandb>=0.15.0

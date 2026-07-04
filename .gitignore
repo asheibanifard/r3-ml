@@ -1,0 +1,94 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+pip-wheel-metadata/
+*.whl
+
+# Virtual environments / Conda
+.env
+.venv
+env/
+venv/
+.conda/
+*.conda
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+*.cover
+
+# ML / Training artifacts
+runs/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.pkl
+*.h5
+*.hdf5
+
+# TensorBoard
+logs/
+tensorboard_logs/
+
+# Weights & Biases
+wandb/
+
+# Data (track configs/scripts, not raw data)
+data/raw/
+data/processed/
+data/interim/
+data/fafb/*.h5
+data/fafb/blocks/
+*.csv
+*.parquet
+*.feather
+*.npy
+*.npz
+*.bin
+
+# Experiment outputs
+outputs/
+results/
+figures/
+models/
+poster.png
+steps.png
+download.log
+nohup.out
+
+# Environment / secrets
+.env
+.env.*
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Linting / formatting caches
+.mypy_cache/
+.ruff_cache/
+.pylint.d/
+
+# Distribution
+*.tar.gz
+*.zip

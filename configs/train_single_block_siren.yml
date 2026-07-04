@@ -1,0 +1,39 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# SIREN — single block training config
+#
+# Usage:
+#   /venv/r3-ml/bin/python3 scripts/siren/siren.py \
+#     --config configs/train_single_block_siren.yml \
+#     --volume data/fafb/blocks/image_z0_y0_x0.tif \
+#     --out      models/siren/z000_y000_x000 \
+#     --logs_dir logs/siren/z000_y000_x000 \
+#     --flat_out
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Model (paper defaults: Sitzmann et al. 2020, Sec. 4 image/volume fitting) ──
+hidden_layers: 4      # sine layers before the output layer
+hidden_dim:    256     # units per sine layer
+w0_first:      30.0    # frequency multiplier, first layer
+w0_hidden:     30.0    # frequency multiplier, every later sine layer
+
+# ── Training schedule ───────────────────────────────────────────────────────────
+epochs:          2000
+steps_per_epoch: 50
+batch:           2048
+chunk_n:         200000   # max query points per CUDA forward call (caps eval VRAM)
+
+# ── Optimizer ────────────────────────────────────────────────────────────────────
+lr:                0.0001  # 1e-4, paper default for Adam
+lr_warmup_steps:   100
+lr_final_fraction: 0.05    # cosine-decay floor as a fraction of lr
+
+# ── Eval ─────────────────────────────────────────────────────────────────────────
+eval_samples:         200000
+eval_detail_interval: 5       # vol_psnr (exact, full-grid) computed every N epochs
+eval_full_max_voxels: 5000000
+
+# ── Checkpointing ────────────────────────────────────────────────────────────────
+ckpt_epoch_interval: 100   # save epoch_NNNN.pth every 100 epochs
+
+# ── Flags (set via CLI) ───────────────────────────────────────────────────────────
+# --flat_out   (write init/best/last.pth directly into --out, no timestamp subdir)

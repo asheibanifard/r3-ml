@@ -40,8 +40,13 @@ dependencies:
   # Optional: Visualization & Monitoring
   - tensorboard>=2.14.0
 
+  # Neuroimaging / volume data
+  - h5py>=3.9.0
+
   # pip packages (conda doesn't have everything)
   - pip
   - pip:
     - python-dotenv>=1.0.0
     - wandb>=0.15.0
+    - cloud-volume>=8.0.0
+    - intern>=1.0.0

@@ -1,0 +1,25 @@
+dataset:
+  name: fafb_v14_ffn1
+  description: "Full Adult Fly Brain v14 — FFN1 automated segmentation (Li et al. 2019)"
+  voxel_size_nm: [4, 4, 40]   # x, y, z at mip 0 of segmentation
+
+channels:
+  # Raw EM (8×8×40 nm at mip 0 → matches seg at mip 1)
+  image: "precomputed://gs://neuroglancer-fafb-data/fafb_v14/fafb_v14_clahe"
+  # FFN1 flood-fill segmentation (4×4×40 nm at mip 0)
+  annotations: "precomputed://gs://fafb-ffn1-20200412/segmentation"
+
+# Spatial bounds (set null to use full volume extent)
+bounds:
+  x: [50000, 54096]   # columns (pixels at 8×8×40 nm — shared coordinate space)
+  y: [20000, 24096]    # rows    (pixels at 8×8×40 nm — shared coordinate space)
+  z: [2000, 6096 ]     # z-slices centred on 4098  ← widen to get more slices
+
+download:
+  # image mip 0 = 8×8×40 nm  ←  matches seg mip 1 = 8×8×40 nm
+  seg_mip:   1          # 8×8×40 nm
+  image_mip: 0          # 8×8×40 nm  (same physical resolution as seg_mip 1)
+  chunk_z:   16         # slices per request
+  use_https: true       # anonymous GCS access over HTTPS
+  output_dir: "data/fafb"
+  save_format: "hdf5"   # "hdf5" or "npy"

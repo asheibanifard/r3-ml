@@ -1,0 +1,71 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# 3D Gaussian Splatting — single block training config
+#
+# Usage:
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config configs/train_single_block.yml \
+#     --volume data/fafb/blocks/image_z0_y0_x0.tif \
+#     --out    models/z000_y000_x000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Gaussian cloud ─────────────────────────────────────────────────────────────
+n_init:        1000       # Gaussians at initialisation
+max_gaussians: 100000     # hard ceiling on total Gaussians — retest capacity w/ corrected LR schedule
+chunk_n:       100000     # chunk size for forward kernel (= max_gaussians)
+
+# ── Training schedule ──────────────────────────────────────────────────────────
+epochs:          2000
+steps_per_epoch: 50
+batch:           2048
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:   500      # first densification event
+densify_until_step:  80000    # densify+prune together through epoch 1600 (80000 / 50 steps)
+densify_interval:    5000     # densify every 5000 steps (= every 100 epochs)
+densify_grad_thresh: 0.0002   # lower → more Gaussians qualify per event
+densify_max_scale:   0.03     # lower — fewer qualify for clone vs split
+
+# ── Prune-only phase — disabled ────────────────────────────────────────────────
+# All growth and pruning now happens inside the densify_and_prune cycle above,
+# which runs through epoch 1600. Epochs 1600-2000 run on a frozen population
+# (no further clone/split/prune) so the model can stabilize at peak quality
+# instead of being whittled down — see CLAUDE.md prune-only discussion.
+prune_from_step:  null
+prune_until_step: null
+prune_inten_thresh: 0.005     # raised → prune dim Gaussians more aggressively
+
+# ── Learning rates ─────────────────────────────────────────────────────────────
+lr_means:       0.0003    # 3e-4 — faster recovery after densification events
+lr_means_final: 0.0000016 # 1.6e-6 — decay floor, reached at end of training
+lr_means_decay_ease_steps: 500  # cosine ease-in once decay starts at densify_until_step
+lr_scales:      0.005
+lr_quats:       0.001
+lr_inten:       0.01
+lr_warmup_steps: 100
+lr_final_fraction: 0.01
+
+# ── Loss weights ───────────────────────────────────────────────────────────────
+lambda_ssim:          0.05
+lambda_scale:         0.0000
+lambda_scale_ceiling: 0.000
+lambda_scale_outlier: 0.0000
+lambda_sparsity:      0.0002
+lambda_aniso:         0.0005
+lambda_count:         0.0
+lambda_L1:            0.0
+lambda_coverage:      0.0
+lambda_grad:          0.0
+
+# ── Scale constraints ──────────────────────────────────────────────────────────
+scale_max_hard: 0.5
+scale_min_clamp: 0.000001  # 1e-6 — allows finer Gaussians
+
+# ── Checkpointing ──────────────────────────────────────────────────────────────
+ckpt_epoch_interval: 100   # save epoch_NNNN.pth every 100 epochs
+ckpt_interval: 0           # disable per-step checkpoints
+
+# ── Flags (set via CLI) ────────────────────────────────────────────────────────
+# --use_kernel    (enable fused CUDA kernel)
+# --flat_out      (save init/best/last.pth directly in --out)
+# --no_swc_init   (random Gaussian initialisation)
+# --no_wandb      (disable Weights & Biases logging)

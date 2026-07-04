@@ -1,0 +1,22 @@
+dataset:
+  name: kasthuri14s1colEM
+  collection: kasthuri
+  experiment: kasthuri14s1colEM
+  voxel_size_nm: [1, 1, 10]   # x, y, z
+
+channels:
+  image:       "precomputed://s3://open-neurodata/kasthuri/kasthuri14s1colEM/image"
+  annotations: "precomputed://s3://open-neurodata/kasthuri/kasthuri14s1colEM/annotations"
+
+# Spatial bounds (set None to use full volume extent)
+bounds:
+  x: [11000, 12000]   # columns (pixels)
+  y: [11000, 12000]   # rows   (pixels)
+  z: [112, 512]       # z-slices to download  ← increase z_stop for more slices
+
+download:
+  mip: 0              # resolution level (0 = finest)
+  chunk_z: 32         # slices fetched per request (keep ≤ 64 to avoid timeouts)
+  use_https: true     # access S3 anonymously over HTTPS
+  output_dir: "data/kasthuri"
+  save_format: "hdf5"  # "hdf5" or "npy"

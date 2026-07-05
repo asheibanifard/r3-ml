@@ -2096,67 +2096,53 @@ def render_splatted_mips(gc: GaussianCloud, dataset: VolumeDataset,
       'xz' : (D, W)  — looking down Y
       'yz' : (D, H)  — looking down X
 
-    On CUDA: uses the fused splat_mip kernel (single launch per view).
-    On CPU:  falls back to the chunked Python implementation.
+    This path is CUDA-only and uses the fused splat_mip kernel
+    (single launch per view).
 
     Parameters
     ----------
     depth_samples : depth positions sampled per ray for the CPU fallback.
-        The CUDA path ignores this value because the fused kernel handles the
-        full MIP projection directly.
+        Kept only for API compatibility; the CUDA kernel handles the full MIP
+        projection directly.
     """
     D, H, W = dataset.D, dataset.H, dataset.W
     mips    = {}
 
-    if gc.device.type == 'cuda':
-        kernel = _load_eval_kernel()
-        lo = gc.aabb.lo.cpu()
-        hi = gc.aabb.hi.cpu()
-        lo_x, hi_x = float(lo[0]), float(hi[0])
-        lo_y, hi_y = float(lo[1]), float(hi[1])
-        lo_z, hi_z = float(lo[2]), float(hi[2])
-        means_c    = gc.means.contiguous()
-        log_s_c    = gc.log_s.contiguous()
-        quats_c    = gc.quats.contiguous()
-        inten_c    = gc.inten.contiguous()
-        scale_min  = float(gc.scale_min)
-        mahal_clamp = float(gc.mahal_clamp)
+    if gc.device.type != 'cuda':
+        raise RuntimeError('render_splatted_mips requires CUDA for direct splat-MIP rendering')
 
-        print(f'  Rendering XY MIP at {H}×{W}) [CUDA]...')
-        flat = kernel.splat_mip(means_c, log_s_c, quats_c, inten_c,
-                                lo_x, hi_x, lo_y, hi_y, lo_z, hi_z,
-                                H, W, 0, scale_min, mahal_clamp)
-        mips['xy'] = flat.reshape(H, W)
+    kernel = _load_eval_kernel()
+    lo = gc.aabb.lo.cpu()
+    hi = gc.aabb.hi.cpu()
+    lo_x, hi_x = float(lo[0]), float(hi[0])
+    lo_y, hi_y = float(lo[1]), float(hi[1])
+    lo_z, hi_z = float(lo[2]), float(hi[2])
+    means_c     = gc.means.contiguous()
+    log_s_c     = gc.log_s.contiguous()
+    quats_c     = gc.quats.contiguous()
+    inten_c     = gc.inten.contiguous()
+    scale_min   = float(gc.scale_min)
+    mahal_clamp = float(gc.mahal_clamp)
 
-        print(f'  Rendering XZ MIP at {D}×{W}) [CUDA]...')
-        flat = kernel.splat_mip(means_c, log_s_c, quats_c, inten_c,
-                                lo_x, hi_x, lo_y, hi_y, lo_z, hi_z,
-                                D, W, 0, 1, scale_min, mahal_clamp)
-        mips['xz'] = flat.reshape(D, W)
+    print(f'  Rendering XY MIP at {H}×{W}) [CUDA]...')
+    flat = kernel.splat_mip(means_c, log_s_c, quats_c, inten_c,
+                            lo_x, hi_x, lo_y, hi_y, lo_z, hi_z,
+                            H, W, depth_samples, 0, scale_min, mahal_clamp)
+    mips['xy'] = flat.reshape(H, W)
 
-        print(f'  Rendering YZ MIP at {D}×{H}) [CUDA]...')
-        flat = kernel.splat_mip(means_c, log_s_c, quats_c, inten_c,
-                                lo_x, hi_x, lo_y, hi_y, lo_z, hi_z,
-                                D, H, 0, 2, scale_min, mahal_clamp)
-        mips['yz'] = flat.reshape(D, H)
+    print(f'  Rendering XZ MIP at {D}×{W}) [CUDA]...')
+    flat = kernel.splat_mip(means_c, log_s_c, quats_c, inten_c,
+                            lo_x, hi_x, lo_y, hi_y, lo_z, hi_z,
+                            D, W, depth_samples, 1, scale_min, mahal_clamp)
+    mips['xz'] = flat.reshape(D, W)
 
-        torch.cuda.empty_cache()
+    print(f'  Rendering YZ MIP at {D}×{H}) [CUDA]...')
+    flat = kernel.splat_mip(means_c, log_s_c, quats_c, inten_c,
+                            lo_x, hi_x, lo_y, hi_y, lo_z, hi_z,
+                            D, H, depth_samples, 2, scale_min, mahal_clamp)
+    mips['yz'] = flat.reshape(D, H)
 
-    else:
-        print(f'  Rendering XY MIP at {H}×{W}) [CPU]...')
-        stack_xy = splat_to_image(gc, dataset, cfg, view_axis='z',
-                                  img_h=H, img_w=W, depth_samples=depth_samples)
-        mips['xy'] = compute_mip_from_stack(stack_xy, axis=0)
-
-        print(f'  Rendering XZ MIP at {D}×{W}) [CPU]...')
-        stack_xz = splat_to_image(gc, dataset, cfg, view_axis='y',
-                                  img_h=D, img_w=W, depth_samples=depth_samples)
-        mips['xz'] = compute_mip_from_stack(stack_xz, axis=0)
-
-        print(f'  Rendering YZ MIP at {D}×{H}) [CPU]...')
-        stack_yz = splat_to_image(gc, dataset, cfg, view_axis='x',
-                                  img_h=D, img_w=H, depth_samples=depth_samples)
-        mips['yz'] = compute_mip_from_stack(stack_yz, axis=0)
+    torch.cuda.empty_cache()
 
     return mips
 

@@ -233,6 +233,8 @@ The compiled `.so` is cached in `~/.cache/torch_extensions/` and reused on subse
 | `configs/train_single_block.yml` | Tuned single-block config (densification schedule, LR, loss weights) |
 | `scripts/siren/siren.py` | SIREN model (`SIRENField`), training loop, CLI |
 | `scripts/siren/siren_cuda.cu` | Hand-written CUDA forward + backward kernel for the MLP |
+| `scripts/find_neuron_voxels.py` | Crawl `segment_*.tif` blocks and dump local voxel coords for target neuron id(s) |
+| `notebooks/model_design.ipynb` | Block stitching, segmentation-id inspection, depth-coded MIP visualization |
 
 ---
 
@@ -274,4 +276,74 @@ as the 3DGS pipeline.
   --volume data/fafb/blocks/image_z0_y0_x0.tif \
   --flat_out \
   --out models_siren/z000_y000_x000
-```
+```
+
+---
+
+## Neuron Segmentation Exploration
+
+Exploratory work in `notebooks/model_design.ipynb`, crawling the pre-extracted
+`segment_*.tif` label blocks (FFN1 instance segmentation, `uint64` ids,
+`0` = background) to inspect how individual neurons/fragments look across
+block boundaries.
+
+### Notebook steps (`notebooks/model_design.ipynb`)
+
+1. **Block stitching** — `stitch_blocks(plane, blocks)` tiles 4 neighbouring
+   blocks into a 2×2 grid for the `xy`, `zy`, `zx` planes. The `xy` case is
+   handled specially: the z=0 tile and z=1 tile are each stitched, then
+   concatenated along z, giving a full 128³ volume (`xy_full`) rather than a
+   half-zero-padded one.
+2. **Segmentation-id inspection** — `xy_full` built from `segment_*.tif`
+   instead of `image_*.tif` has ~197 unique ids in just this 128³ crop, one
+   of which alone covers ~36% of voxels. Plotting raw ids with
+   `imshow(..., cmap='gray')` is misleading: matplotlib autoscales linearly
+   between 0 and the max id (billions), so only the single largest id reads
+   as white and everything else collapses toward black — it looks like a
+   flat binary mask, not real neuron structure.
+3. **Depth-coded MIP** (`depth_coded_mip`) — a flat `np.max(mask, axis=...)`
+   MIP collapses all depth information, so branching structure disappears.
+   Colouring each projected pixel by the depth (index along the projection
+   axis) of the first non-background voxel — via a colormap, or via hue
+   (which neurite) + brightness (depth) for multiple ids at once — recovers
+   a 3D cue from a single 2D image.
+4. **Global top-5 neuron ids** — crawls every `segment_*.tif` block (all
+   262,144), tallies total voxel count per id (excluding background),
+   and writes the top 5 to `results/top5_neuron_ids.json` as
+   `[{"id": ..., "voxel_count": ...}, ...]`. These global top ids are
+   large, sprawling structures (hundreds of millions of voxels each) —
+   distinct from whatever id happens to dominate a single small crop.
+
+### `scripts/find_neuron_voxels.py`
+
+Crawls all `segment_*.tif` blocks and records local voxel coordinates for
+one id (`--target_id`) or several (`--target_ids_file`, a JSON file of
+records with an `"id"` field, e.g. `top5_neuron_ids.json` — a voxel is
+recorded if its id matches *any* entry). Output is a flat JSON array of
+`[block_id, z, y, x]` per matching voxel.
+
+`--block_name_prefix {segment,image}` selects which filenames are used to
+*discover and order* blocks (`image_*.tif` and `segment_*.tif` share the
+same `(z, y, x)` coordinates); segmentation values are always read from the
+matching `segment_*.tif` regardless. Block id is the index into the block
+list after sorting by `(x, y, z)` — x varies fastest, then y, then z.
+
+```bash
+/venv/r3-ml/bin/python3 scripts/find_neuron_voxels.py \
+  --blocks_dir data/fafb/blocks \
+  --target_ids_file results/top5_neuron_ids.json \
+  --block_name_prefix image \
+  --out results/top5_binary_voxels.json \
+  --progress_every 5000
+```
+
+Runtime is I/O-bound: ~4-5 ms/block, so a full 262,144-block crawl takes
+~18-20 min uncontended (longer if run concurrently with another crawl).
+
+### Outputs (`results/`, gitignored — not committed)
+
+| File | Contents |
+|---|---|
+| `results/top5_neuron_ids.json` | Top 5 neuron ids globally by voxel count |
+| `results/neuron_3431339361_voxels.json` | Single-id crawl: 13,951,631 voxels across 127 blocks (~278 MB) |
+| `results/top5_binary_voxels.json` | Union of the top-5 ids: 1,135,541,889 voxels across 24,509 blocks (~24.3 GB — large; prefer a binary format like `.npy`/`.npz` for anything downstream that needs to load it back) |

@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.cubin
+*.ptx
 *.egg
 *.egg-info/
 dist/
@@ -65,7 +67,7 @@ data/fafb/blocks/
 # Experiment outputs
 outputs/
 results/
-figures/
+/figures/
 models/
 poster.png
 steps.png

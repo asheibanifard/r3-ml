@@ -7,9 +7,9 @@ is crash-safe and resumable.  Re-running with the same config skips any
 z-slices that were already written.
 
 Usage:
-    python scripts/download_ocp_segmented.py --config configs/ocp_kasthuri.yml
-    python scripts/download_ocp_segmented.py --config configs/ocp_fafb.yml
-    python scripts/download_ocp_segmented.py --config configs/ocp_fafb.yml --z-start 4082 --z-stop 4200
+    python scripts/data_scripts/download_ocp_segmented.py --config configs/ocp_kasthuri.yml
+    python scripts/data_scripts/download_ocp_segmented.py --config configs/ocp_fafb.yml
+    python scripts/data_scripts/download_ocp_segmented.py --config configs/ocp_fafb.yml --z-start 4082 --z-stop 4200
 """
 
 import argparse

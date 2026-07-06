@@ -19,7 +19,7 @@ import numpy as np
 import torch
 import tifffile
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import _3dgs._3dgs as _mod
 
 from _3dgs._3dgs import AABB, GaussianCloud, VolumeDataset, render_splatted_mips
@@ -61,7 +61,7 @@ def main() -> None:
                         help='CPU-fallback ray samples; CUDA ignores this value')
     args = parser.parse_args()
 
-    root = Path(__file__).parent.parent
+    root = Path(__file__).parent.parent.parent
     ckpt_path = Path(args.ckpt) if Path(args.ckpt).is_absolute() else root / args.ckpt
     volume_path = Path(args.volume) if Path(args.volume).is_absolute() else root / args.volume
     out_dir = Path(args.out_dir) if Path(args.out_dir).is_absolute() else root / args.out_dir

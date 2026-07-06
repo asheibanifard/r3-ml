@@ -137,7 +137,7 @@ def best_psnr_from_log(model_dir: Path) -> float | None:
 def main():
     cfg = parse_args()
 
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     blocks_dir   = project_root / cfg.blocks_dir
     models_root  = project_root / cfg.models_dir
     logs_root    = project_root / cfg.logs_dir

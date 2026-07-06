@@ -12,7 +12,7 @@ Outputs:
   <out_dir>/orbit.gif       (requires Pillow)
 
 Usage:
-  python scripts/render_camera.py \
+  python scripts/render_scripts/render_camera.py \
       --ckpt    models/z000_y000_x000/best.pth \
       --volume  data/fafb/blocks/image_z0_y0_x0.tif \
       --out_dir models/z000_y000_x000/renders \
@@ -30,7 +30,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.ndimage import map_coordinates
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import _3dgs._3dgs as _mod
 _mod.USE_CUDA_KERNEL = True
 _mod._load_3dgs_kernel()
@@ -161,7 +161,7 @@ def main():
     parser.add_argument('--cmap',      default='gray')
     args = parser.parse_args()
 
-    root        = Path(__file__).parent.parent
+    root        = Path(__file__).parent.parent.parent
     ckpt_path   = Path(args.ckpt)    if Path(args.ckpt).is_absolute()    else root / args.ckpt
     volume_path = Path(args.volume)  if Path(args.volume).is_absolute()  else root / args.volume
     out_dir     = Path(args.out_dir) if Path(args.out_dir).is_absolute() else root / args.out_dir

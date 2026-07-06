@@ -128,7 +128,7 @@ Linear warmup over first `lr_warmup_steps` steps (from `lr_warmup_init_factor` o
 ### Script
 
 ```
-scripts/train_all_blocks.py
+scripts/train_scripts/train_all_blocks.py
 ```
 
 Trains all 262,144 blocks sequentially using the fused CUDA kernel. Fully resumable — blocks with an existing `last.pth` are skipped.
@@ -136,7 +136,7 @@ Trains all 262,144 blocks sequentially using the fused CUDA kernel. Fully resuma
 **Launch command:**
 
 ```bash
-nohup /venv/r3-ml/bin/python3 scripts/train_all_blocks.py \
+nohup /venv/r3-ml/bin/python3 scripts/train_scripts/train_all_blocks.py \
   --blocks_dir data/fafb/blocks \
   --models_dir models \
   --logs_dir   logs/3dgs/blocks \
@@ -226,14 +226,14 @@ The compiled `.so` is cached in `~/.cache/torch_extensions/` and reused on subse
 | `scripts/_3dgs/_3dgs_training.py` | Training loop (`train_impl`) |
 | `scripts/_3dgs/3dgs_cuda.cu` | Fused CUDA forward + backward kernel |
 | `scripts/_3dgs/3dgs_eval_cuda.cu` | Inference kernels (volume reconstruct, MIP splat) |
-| `scripts/train_all_blocks.py` | Batch runner for all 262,144 blocks |
+| `scripts/train_scripts/train_all_blocks.py` | Batch runner for all 262,144 blocks |
 | `data/fafb/blocks/` | Pre-extracted 64³ block TIFs |
 | `models/` | Per-block checkpoint output |
 | `logs/3dgs/blocks/` | Per-block training logs |
 | `configs/train_single_block.yml` | Tuned single-block config (densification schedule, LR, loss weights) |
 | `scripts/siren/siren.py` | SIREN model (`SIRENField`), training loop, CLI |
 | `scripts/siren/siren_cuda.cu` | Hand-written CUDA forward + backward kernel for the MLP |
-| `scripts/find_neuron_voxels.py` | Crawl `segment_*.tif` blocks and dump local voxel coords for target neuron id(s) |
+| `scripts/data_scripts/find_neuron_voxels.py` | Crawl `segment_*.tif` blocks and dump local voxel coords for target neuron id(s) |
 | `notebooks/model_design.ipynb` | Block stitching, segmentation-id inspection, depth-coded MIP visualization |
 
 ---
@@ -314,7 +314,7 @@ block boundaries.
    large, sprawling structures (hundreds of millions of voxels each) —
    distinct from whatever id happens to dominate a single small crop.
 
-### `scripts/find_neuron_voxels.py`
+### `scripts/data_scripts/find_neuron_voxels.py`
 
 Crawls all `segment_*.tif` blocks and records local voxel coordinates for
 one id (`--target_id`) or several (`--target_ids_file`, a JSON file of
@@ -329,7 +329,7 @@ matching `segment_*.tif` regardless. Block id is the index into the block
 list after sorting by `(x, y, z)` — x varies fastest, then y, then z.
 
 ```bash
-/venv/r3-ml/bin/python3 scripts/find_neuron_voxels.py \
+/venv/r3-ml/bin/python3 scripts/data_scripts/find_neuron_voxels.py \
   --blocks_dir data/fafb/blocks \
   --target_ids_file results/top5_neuron_ids.json \
   --block_name_prefix image \

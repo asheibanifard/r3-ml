@@ -57,6 +57,7 @@ data/processed/
 data/interim/
 data/fafb/*.h5
 data/fafb/blocks/
+data/smoke_data/
 *.csv
 *.parquet
 *.feather
@@ -69,6 +70,7 @@ outputs/
 results/
 /figures/
 models/
+models_smoke/
 poster.png
 steps.png
 download.log

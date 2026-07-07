@@ -56,7 +56,8 @@ class _LogFile:
         self._f.close()
 
 
-def _visualize_middle_slices(volume_gt: torch.Tensor, gc, out_dir: Path, epoch: int, device: torch.device):
+def _visualize_middle_slices(volume_gt: torch.Tensor, gc, out_dir: Path, epoch: int, device: torch.device,
+                              ext: str = "png"):
     """Save middle slices (xy, xz, yz) with GT, prediction, and difference.
 
     Args:
@@ -65,6 +66,7 @@ def _visualize_middle_slices(volume_gt: torch.Tensor, gc, out_dir: Path, epoch: 
         out_dir: Output directory for saving plots
         epoch: Current epoch number
         device: Torch device
+        ext: Output image format/extension (e.g. "png", "pdf")
     """
     if not HAS_MATPLOTLIB:
         return
@@ -142,7 +144,7 @@ def _visualize_middle_slices(volume_gt: torch.Tensor, gc, out_dir: Path, epoch: 
         fig.suptitle(f"Epoch {epoch} - Middle Slices", fontsize=14, fontweight='bold')
         plt.tight_layout()
 
-        out_path = out_dir / f"slices_ep{epoch:04d}.png"
+        out_path = out_dir / f"slices_ep{epoch:04d}.{ext}"
         fig.savefig(out_path, dpi=100, bbox_inches='tight')
         plt.close(fig)
 
@@ -153,7 +155,12 @@ def _visualize_middle_slices(volume_gt: torch.Tensor, gc, out_dir: Path, epoch: 
 
 
 def _load_volume(volume_path: str) -> tuple[torch.Tensor, float, float]:
-    raw = tifffile.imread(volume_path)
+    if Path(volume_path).suffix.lower() in (".h5", ".hdf5", ".hdf"):
+        import h5py
+        with h5py.File(volume_path, "r") as f:
+            raw = f["raw"][:]
+    else:
+        raw = tifffile.imread(volume_path)
     vol = raw.astype(np.float32)
     vmin, vmax = float(vol.min()), float(vol.max())
     if vmax > vmin:

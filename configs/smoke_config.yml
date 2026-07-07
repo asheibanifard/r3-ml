@@ -1,0 +1,80 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# 3D Gaussian Splatting — smoke-test config for the smoke_data blocks
+#
+# smoke_data blocks are 50×50×50 (see scripts/data_scripts/extract_smoke_blocks.py),
+# smaller than FAFB's 64³ blocks — ssim_crop must be <= block size or the SSIM
+# loss term's reshape fails.
+#
+# Usage:
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config configs/smoke_config.yml \
+#     --volume data/smoke_data/blocks/block_z0_y0_x0.h5 \
+#     --use_kernel --flat_out --no_swc_init --no_wandb \
+#     --out models_smoke/block_z0_y0_x0
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Gaussian cloud ─────────────────────────────────────────────────────────────
+n_init:        5000        # Gaussians at initialisation
+max_gaussians: 50000       # hard ceiling — kept small for a quick smoke test
+chunk_n:       1000       # chunk size for forward kernel (= max_gaussians)
+
+# ── Training schedule ──────────────────────────────────────────────────────────
+epochs:          200       # short — just enough to confirm the pipeline runs end-to-end
+steps_per_epoch: 50
+batch:           2048
+
+# ── SSIM crop ───────────────────────────────────────────────────────────────────
+ssim_crop: 50   # must be <= block size (50); default of 64 breaks on these blocks
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:   500      # first densification event
+densify_until_step:  9000      # short training run, so densify+prune finishes early
+densify_interval:    100
+densify_grad_thresh: 0.0002
+densify_max_scale:   0.03
+
+# ── Prune-only phase — disabled ────────────────────────────────────────────────
+prune_from_step:  null
+prune_until_step: null
+prune_inten_thresh: 0.005
+
+# ── Learning rates ─────────────────────────────────────────────────────────────
+lr_means:       0.0003
+lr_means_final: 0.0000016
+lr_means_decay_ease_steps: 500
+lr_scales:      0.005
+lr_quats:       0.001
+lr_inten:       0.01
+lr_warmup_steps: 100
+lr_final_fraction: 0.01
+
+# ── Loss weights ───────────────────────────────────────────────────────────────
+lambda_ssim:          0.05
+lambda_scale:         0.0000
+lambda_scale_ceiling: 0.000
+lambda_scale_outlier: 0.0000
+lambda_sparsity:      0.0002
+lambda_aniso:         0.0005
+lambda_count:         0.0
+lambda_L1:            0.0
+lambda_coverage:      0.0
+lambda_grad:          0.0
+
+# ── Scale constraints ──────────────────────────────────────────────────────────
+scale_max_hard: 0.5
+scale_min_clamp: 0.000001
+
+# ── Checkpointing ──────────────────────────────────────────────────────────────
+ckpt_epoch_interval: 10   # save epoch_NNNN.pth every 10 epochs (short run)
+ckpt_interval: 0          # disable per-step checkpoints
+
+# ── Post-hoc navigation ──────────────────────────────────────────────────────────
+sliding_window_size: 32   # isotropic edge length (voxels); not read by the training
+                          # loop itself, only by notebook navigation code (e.g.
+                          # smoke_data.ipynb's BlockGaussianCache / render_sliding_block)
+
+# ── Flags (set via CLI) ────────────────────────────────────────────────────────
+# --use_kernel    (enable fused CUDA kernel)
+# --flat_out      (save init/best/last.pth directly in --out)
+# --no_swc_init   (random Gaussian initialisation)
+# --no_wandb      (disable Weights & Biases logging)

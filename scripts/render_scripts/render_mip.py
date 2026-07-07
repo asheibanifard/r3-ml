@@ -17,12 +17,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import tifffile
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import _3dgs._3dgs as _mod
 
 from _3dgs._3dgs import AABB, GaussianCloud, VolumeDataset, render_splatted_mips
+from _3dgs._3dgs_training import _load_volume
 
 
 def _make_cfg() -> argparse.Namespace:
@@ -73,9 +73,9 @@ def main() -> None:
     device = torch.device('cuda')
     cfg = _make_cfg()
 
-    vol_np = tifffile.imread(str(volume_path)).astype('float32') / 255.0
+    volume, _, _ = _load_volume(str(volume_path))
     aabb = AABB.unit()
-    dataset = VolumeDataset(torch.from_numpy(vol_np), aabb, cfg)
+    dataset = VolumeDataset(volume, aabb, cfg)
 
     _mod.USE_CUDA_KERNEL = True
     _mod._load_3dgs_kernel()

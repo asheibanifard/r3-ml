@@ -2325,6 +2325,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--prune_inten_thresh", type=float, default=1e-3,
                    help="Remove Gaussians with softplus(inten) below this during densify")
 
+    # ── Post-hoc navigation (not read by the training loop itself) ─────────────
+    p.add_argument("--sliding_window_size", type=int, default=32,
+                   help="Isotropic edge length (voxels) of the sliding camera window used by "
+                        "notebook navigation code (e.g. smoke_data.ipynb); unused during training, "
+                        "kept here so config files can carry it without failing key validation")
+
     # ── Adaptive density control ───────────────────────────────────────────────
     p.add_argument("--densify_from_step",   type=int,   default=500)
     p.add_argument("--prune_from_step",     type=int,   default=None,

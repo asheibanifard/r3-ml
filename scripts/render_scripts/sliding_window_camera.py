@@ -38,6 +38,25 @@ from _3dgs._3dgs import AABB, GaussianCloud, _load_eval_kernel
 from render_scripts.render_camera import render_frame  # camera-at-centre ray-march + MIP
 
 
+def compute_global_shape(grid_n: int, block_size: int, block_shape_fn=None) -> tuple[int, int, int]:
+    """Total (D, H, W) of an grid_n x grid_n x grid_n block region, computed
+    purely from block-size metadata — no block file is opened or stitched.
+
+    Assumes only the *last* block along each axis can be ragged (matches
+    BlockGaussianCache's own offset math, which places block i at i*block_size
+    regardless of raggedness — only valid if every earlier block is full-size).
+    """
+    if block_shape_fn is None:
+        def block_shape_fn(dz, dy, dx):
+            return block_size, block_size, block_size
+
+    last = grid_n - 1
+    D = last * block_size + block_shape_fn(last, 0, 0)[0]
+    H = last * block_size + block_shape_fn(0, last, 0)[1]
+    W = last * block_size + block_shape_fn(0, 0, last)[2]
+    return (D, H, W)
+
+
 def axis_transform(block_n: int, global_n: int, offset: int) -> tuple[float, float]:
     """Map a LOCAL normalised coord (a block's own [-1,1]) to the GLOBAL
     normalised coord of the stitched volume: c_global = A*c_local + B."""
@@ -230,7 +249,8 @@ def recenter_and_rescale(local_gc, bounds):
 
 
 def render_frame_cuda_splat(means, log_s, quats, inten, azimuth_deg,
-                             scale_min, mahal_clamp, img_size=256, depth_samples=32):
+                             scale_min, mahal_clamp, img_size=256, depth_samples=32,
+                             density_scale=1.0e-4, max_gauss_per_tile=0):
     """One frame via the real fused CUDA splat_mip kernel: rotate the
     (already recentred/rescaled to [-1,1]^3) Gaussians by -azimuth about Y,
     then take the axis-aligned 'looking down Z' projection — equivalent to
@@ -253,7 +273,8 @@ def render_frame_cuda_splat(means, log_s, quats, inten, azimuth_deg,
                                  quats_rot.contiguous(), inten.contiguous(),
                                  -1.0, 1.0, -1.0, 1.0, -1.0, 1.0,
                                  img_size, img_size, depth_samples, 0,
-                                 float(scale_min), float(mahal_clamp))
+                                 float(scale_min), float(mahal_clamp),
+                                 float(density_scale), int(max_gauss_per_tile))
     return flat.reshape(img_size, img_size).clamp(0, 1).cpu().numpy().astype(np.float32)
 
 

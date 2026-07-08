@@ -13,6 +13,8 @@
 #     --out models_smoke/block_z0_y0_x0
 # ──────────────────────────────────────────────────────────────────────────────
 
+ckpt_dir : '../models_smoke/block_z000_y001_x006/best.pth'
+
 # ── Gaussian cloud ─────────────────────────────────────────────────────────────
 n_init:        5000        # Gaussians at initialisation
 max_gaussians: 50000       # hard ceiling — kept small for a quick smoke test

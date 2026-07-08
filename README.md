@@ -34,7 +34,7 @@ echo "launched pid $!"
 
 nohup /venv/r3-ml/bin/python3 scripts/data_scripts/upload_to_hf.py \
   --repo_id Arminshfard/fafb-em-blocks \
-  --folder_path data/fafb/blocks \
+  --folder_path data/smoke_data \
   --path_in_repo blocks \
   --repo_type dataset \
   > logs/upload_to_hf.log 2>&1 &

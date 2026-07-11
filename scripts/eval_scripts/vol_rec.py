@@ -1,0 +1,69 @@
+# reconstruct the volume from the Gaussian cloud
+import sys, argparse, torch, numpy as np, matplotlib.pyplot as plt
+import torch.nn.functional as F
+sys.path.insert(0, '/root/project/scripts')
+
+import _3dgs._3dgs as _mod
+_mod.USE_CUDA_KERNEL = True
+_mod._load_3dgs_kernel()
+from _3dgs._3dgs import GaussianCloud, AABB, VolumeDataset
+from _3dgs._3dgs_training import _load_volume
+
+device = torch.device('cuda')
+
+# smoke_data blocks are 50^3 (see configs/smoke_config.yml) -> ssim_crop must match
+cfg = argparse.Namespace(
+    scale_min_clamp=1e-5, mahal_max_clamp=20.0, init_scale=0.05,
+    init_inten=0.1, init_scale_z_factor=1.0, n_init=5000,
+    swc_path=None, chunk_n=1000, eval_samples=200_000,
+    ssim_crop=50, batch=2048,
+    grad_sample_weight=0.0, lambda_ssim=0.2,
+)
+
+# --- load GT volume (ground truth) ---
+vol_t, _, _ = _load_volume('/root/project/data/smoke_data/blocks/block_z0_y1_x6.h5')
+aabb    = AABB.unit()
+dataset = VolumeDataset(vol_t, aabb, cfg)
+D, H, W = dataset.D, dataset.H, dataset.W
+
+# --- load model directly via GaussianCloud.load (handles the .pth checkpoint format) ---
+ckpt_path = '/root/project/models_smoke/block_z000_y001_x006/best.pth'
+gc = GaussianCloud.load(ckpt_path, aabb, device, cfg)
+print(f"Loaded {gc.N} Gaussians from {ckpt_path}")
+
+# --- reconstruct volume slice-by-slice ---
+pred_vol = np.empty((D, H, W), dtype=np.float32)
+with torch.no_grad():
+    for z in range(D):
+        pts = dataset._indices_to_pts(
+            torch.full((H * W,), z, dtype=torch.long),
+            torch.arange(H, dtype=torch.long).repeat_interleave(W),
+            torch.arange(W, dtype=torch.long).tile(H),
+            device,
+        )
+        pred = gc.forward(pts, chunk_n=cfg.chunk_n).clamp(0.0, 1.0)
+        pred_vol[z] = pred.cpu().numpy().reshape(H, W)
+#check min max of pred_vol
+print(f"Reconstructed volume shape: {pred_vol.shape}  range: [{pred_vol.min():.3f}, {pred_vol.max():.3f}]")
+query_pt = torch.tensor([[0.3369, 0.7638, -0.3207]], device=device)
+with torch.no_grad():
+    query_val = gc.forward(query_pt, chunk_n=cfg.chunk_n).clamp(0.0, 1.0)
+
+    # trilinear GT lookup at the same continuous point (same convention as
+    # loss_sparsity_intensity: grid_sample expects (1,1,1,N,3), align_corners=True)
+    grid  = query_pt.view(1, 1, 1, 1, 3)
+    vol_5d = vol_t.unsqueeze(0).unsqueeze(0).to(device)  # (1,1,D,H,W)
+    gt_val = F.grid_sample(vol_5d, grid, mode='bilinear', align_corners=True).view(-1)
+
+print(f"Predicted intensity at {query_pt.tolist()[0]}: {query_val.item():.4f}")
+print(f"Original (GT) intensity at {query_pt.tolist()[0]}: {gt_val.item():.4f}")
+
+# --- visualise middle slice ---
+mid = D // 2
+fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+axes[0].imshow(vol_t[:, :, mid].numpy(), cmap='gray', vmin=0, vmax=1); axes[0].set_title(f"GT   Z={mid}"); axes[0].axis('off')
+axes[1].imshow(pred_vol[:,:, mid],      cmap='gray', vmin=0, vmax=1); axes[1].set_title(f"Pred Z={mid}"); axes[1].axis('off')
+plt.tight_layout()
+out_png = "/root/project/scripts/eval_scripts/vol_rec_mid_slice.png"
+fig.savefig(out_png, dpi=150)
+print(f"Saved {out_png}")

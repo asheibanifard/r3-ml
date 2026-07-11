@@ -19,6 +19,8 @@
 //      sums Gaussian density at every Z sample, and keeps the maximum.
 //
 // Runtime dependencies: CUDA Toolkit only.
+// Benchmarking: CUDA events are recorded on the renderer stream, with
+// an independent CPU wall-clock sanity check.
 // Build:
 //   nvcc -O3 -std=c++17 --use_fast_math -lineinfo \
 //        gaussian_mip_realtime.cu -o gaussian_mip_realtime
@@ -640,6 +642,10 @@ public:
 
     uint32_t pair_count() const { return pair_count_; }
 
+    cudaStream_t stream() const {
+        return stream_;
+    }
+
 private:
     void preprocess_and_bin() {
         const int threads = 256;
@@ -818,11 +824,14 @@ int main(int argc, char** argv) {
         CUDA_CHECK(cudaEventCreate(&start));
         CUDA_CHECK(cudaEventCreate(&stop));
 
-        CUDA_CHECK(cudaEventRecord(start));
+        // Record both events on the same non-blocking stream used by render().
+        CUDA_CHECK(cudaEventRecord(start, renderer.stream()));
+
         for (int i = 0; i < benchmark_frames; ++i) {
             renderer.render();
         }
-        CUDA_CHECK(cudaEventRecord(stop));
+
+        CUDA_CHECK(cudaEventRecord(stop, renderer.stream()));
         CUDA_CHECK(cudaEventSynchronize(stop));
 
         float total_ms = 0.0f;
@@ -831,11 +840,53 @@ int main(int argc, char** argv) {
         CUDA_CHECK(cudaEventDestroy(start));
         CUDA_CHECK(cudaEventDestroy(stop));
 
-        const float frame_ms = total_ms / float(benchmark_frames);
-        const float fps = 1000.0f / frame_ms;
+        const float frame_ms =
+            total_ms / static_cast<float>(benchmark_frames);
 
-        std::cout << "Average render time: " << frame_ms << " ms\n";
-        std::cout << "FPS: " << fps << "\n";
+        const float fps =
+            (frame_ms > 0.0f)
+                ? 1000.0f / frame_ms
+                : std::numeric_limits<float>::infinity();
+
+        std::cout << "CUDA event render time: "
+                  << frame_ms << " ms\n";
+
+        std::cout << "CUDA event FPS: "
+                  << fps << "\n";
+
+        // Independent CPU wall-clock sanity check.
+        renderer.synchronize();
+
+        const auto cpu_begin =
+            std::chrono::high_resolution_clock::now();
+
+        for (int i = 0; i < benchmark_frames; ++i) {
+            renderer.render();
+        }
+
+        renderer.synchronize();
+
+        const auto cpu_end =
+            std::chrono::high_resolution_clock::now();
+
+        const double cpu_total_ms =
+            std::chrono::duration<double, std::milli>(
+                cpu_end - cpu_begin
+            ).count();
+
+        const double cpu_frame_ms =
+            cpu_total_ms / static_cast<double>(benchmark_frames);
+
+        const double cpu_fps =
+            (cpu_frame_ms > 0.0)
+                ? 1000.0 / cpu_frame_ms
+                : std::numeric_limits<double>::infinity();
+
+        std::cout << "CPU wall-clock render time: "
+                  << cpu_frame_ms << " ms\n";
+
+        std::cout << "CPU wall-clock FPS: "
+                  << cpu_fps << "\n";
 
         renderer.render();
         auto output = renderer.download();

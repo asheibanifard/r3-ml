@@ -76,6 +76,9 @@ steps.png
 download.log
 nohup.out
 
+# Compiled CUDA test/benchmark binaries (built by run_gaussian_mip.sh)
+scripts/render_scripts/gaussian_mip_realtime
+
 # Environment / secrets
 .env
 .env.*

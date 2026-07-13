@@ -1,4 +1,5 @@
 # reconstruct the volume from the Gaussian cloud
+import csv
 import sys, argparse, torch, numpy as np, matplotlib.pyplot as plt
 import torch.nn.functional as F
 sys.path.insert(0, '/root/project/scripts')
@@ -61,9 +62,121 @@ print(f"Original (GT) intensity at {query_pt.tolist()[0]}: {gt_val.item():.4f}")
 # --- visualise middle slice ---
 mid = D // 2
 fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-axes[0].imshow(vol_t[:, :, mid].numpy(), cmap='gray', vmin=0, vmax=1); axes[0].set_title(f"GT   Z={mid}"); axes[0].axis('off')
-axes[1].imshow(pred_vol[:,:, mid],      cmap='gray', vmin=0, vmax=1); axes[1].set_title(f"Pred Z={mid}"); axes[1].axis('off')
+axes[0].imshow(vol_t[mid].numpy(), cmap='gray', vmin=0, vmax=1); axes[0].set_title(f"GT   Z={mid}"); axes[0].axis('off')
+axes[1].imshow(pred_vol[mid],      cmap='gray', vmin=0, vmax=1); axes[1].set_title(f"Pred Z={mid}"); axes[1].axis('off')
 plt.tight_layout()
 out_png = "/root/project/scripts/eval_scripts/vol_rec_mid_slice.png"
 fig.savefig(out_png, dpi=150)
 print(f"Saved {out_png}")
+
+np.save(f"/root/project/scripts/eval_scripts/rec_{ckpt_path.split('/')[-2].split('.')[0]}.npy", pred_vol)
+
+# define ssim 
+def ssim(img1, img2, C1=0.01**2, C2=0.03**2):
+    """Compute the Structural Similarity Index (SSIM) between two images."""
+    mu1 = img1.mean()
+    mu2 = img2.mean()
+    sigma1_sq = ((img1 - mu1) ** 2).mean()
+    sigma2_sq = ((img2 - mu2) ** 2).mean()
+    sigma12 = ((img1 - mu1) * (img2 - mu2)).mean()
+
+    ssim_index = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2))
+    return ssim_index
+# save the metrics in csv file by comparing volumes MSE PSNR SSIM Max Error Output Min Output Max
+with open(f"/root/project/scripts/eval_scripts/metrics_{ckpt_path.split('/')[-2].split('.')[0]}.csv", 'w', newline='') as csvfile:
+    fieldnames = ['MSE', 'PSNR', 'SSIM', 'Max Error', 'Output Min', 'Output Max']
+    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    writer.writeheader()
+
+    mse = np.mean((pred_vol - vol_t.numpy()) ** 2)
+    psnr = 10 * np.log10(1.0 / mse) if mse > 0 else float('inf')
+    SSIM = ssim(pred_vol, vol_t.numpy())
+    max_error = np.max(np.abs(pred_vol - vol_t.numpy()))
+    output_min = np.min(pred_vol)
+    output_max = np.max(pred_vol)
+
+    writer.writerow({
+        'MSE': mse,
+        'PSNR': psnr,
+        'SSIM': SSIM,
+        'Max Error': max_error,
+        'Output Min': output_min,
+        'Output Max': output_max
+    })
+
+    # save pdf mid slices saggital coronal axial and compare them with gt and also add difference images
+gt_vol = vol_t.detach().cpu().numpy()
+
+pred_slices = [
+    pred_vol[:, :, W // 2],   # Sagittal
+    pred_vol[:, H // 2, :],   # Coronal
+    pred_vol[D // 2, :, :],   # Axial
+]
+
+gt_slices = [
+    gt_vol[:, :, W // 2],     # Sagittal
+    gt_vol[:, H // 2, :],     # Coronal
+    gt_vol[D // 2, :, :],     # Axial
+]
+
+titles = ["Sagittal", "Coronal", "Axial"]
+
+fig, axs = plt.subplots(3, 3, figsize=(12, 12))
+
+for i, title in enumerate(titles):
+    pred_slice = pred_slices[i]
+    gt_slice = gt_slices[i]
+    diff = np.abs(pred_slice - gt_slice)
+
+    # Prediction
+    axs[i, 0].imshow(
+        pred_slice,
+        cmap="gray",
+        vmin=0,
+        vmax=1,
+    )
+    axs[i, 0].set_title(f"Pred {title}")
+
+    # Ground truth
+    axs[i, 1].imshow(
+        gt_slice,
+        cmap="gray",
+        vmin=0,
+        vmax=1,
+    )
+    axs[i, 1].set_title(f"GT {title}")
+
+    # Absolute difference
+    im = axs[i, 2].imshow(
+        diff,
+        cmap="hot",
+        vmin=0,
+        vmax=max(float(diff.max()), 1e-8),
+    )
+    axs[i, 2].set_title(f"Diff {title}")
+
+    fig.colorbar(
+        im,
+        ax=axs[i, 2],
+        fraction=0.046,
+        pad=0.04,
+    )
+
+plt.tight_layout()
+
+block_name = ckpt_path.split("/")[-2].split(".")[0]
+
+out_pdf = (
+    f"/root/project/scripts/eval_scripts/"
+    f"vol_rec_slices_{block_name}.pdf"
+)
+
+fig.savefig(
+    out_pdf,
+    dpi=800,
+    bbox_inches="tight",
+)
+
+plt.close(fig)
+
+print(f"Saved {out_pdf}")

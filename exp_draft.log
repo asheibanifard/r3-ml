@@ -1,9 +1,9 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.12)  12 JUL 2026 21:14
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.12)  12 JUL 2026 21:28
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
-**exp_draft.tex
-(./exp_draft.tex
+**research/exp_draft.tex research/
+(./research/exp_draft.tex
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-01-22>
 
@@ -623,19 +623,18 @@ Overfull \hbox (74.48767pt too wide) detected at line 67
 [2
 
 ] [3] [4]
-<plots/vol_rec_slices_block_z000_y001_x006.pdf, id=221, 857.88933pt x 859.77711
-pt>
-File: plots/vol_rec_slices_block_z000_y001_x006.pdf Graphic file (type pdf)
-<use plots/vol_rec_slices_block_z000_y001_x006.pdf>
-Package pdftex.def Info: plots/vol_rec_slices_block_z000_y001_x006.pdf  used on
- input line 362.
-(pdftex.def)             Requested size: 317.07614pt x 317.77145pt.
+<research/plots/first-plot.pdf, id=221, 859.66415pt x 859.77711pt>
+File: research/plots/first-plot.pdf Graphic file (type pdf)
+<use research/plots/first-plot.pdf>
+Package pdftex.def Info: research/plots/first-plot.pdf  used on input line 362.
+
+(pdftex.def)             Requested size: 407.66833pt x 407.71617pt.
  [5]
 Overfull \hbox (50.70699pt too wide) in paragraph at lines 391--398
  [][] 
  []
 
-[6 <./plots/vol_rec_slices_block_z000_y001_x006.pdf>]
+[6 <./research/plots/first-plot.pdf>]
 Overfull \hbox (6.26718pt too wide) in paragraph at lines 415--422
  [][] 
  []
@@ -680,21 +679,17 @@ Overfull \hbox (37.90596pt too wide) in paragraph at lines 1027--1043
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-01-22>
  ***********
-
-
-LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
-
 Package rerunfilecheck Info: File `exp_draft.out' has not changed.
 (rerunfilecheck)             Checksum: 24CA8DB8129FD50B4CE9B9BE2FC6DEE0;6882.
  ) 
 Here is how much of TeX's memory you used:
- 16631 strings out of 476106
- 318583 string characters out of 5793933
+ 16632 strings out of 476106
+ 318498 string characters out of 5793933
  1941975 words of memory out of 5000000
  38305 multiletter control sequences out of 15000+600000
  568584 words of font info for 74 fonts, out of 8000000 for 9000
  59 hyphenation exceptions out of 8191
- 75i,12n,79p,455b,1006s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 75i,12n,79p,474b,1006s stack positions out of 10000i,1000n,20000p,200000b,200000s
  </root/.texlive2023/texmf-var/fonts/pk/ljfour/jknappen/ec/tcrm1095.600pk></u
 sr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></usr/sha
 re/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/share/tex
@@ -710,7 +705,7 @@ pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.pfb></us
 r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/shar
 e/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/share/texli
 ve/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb>
-Output written on exp_draft.pdf (18 pages, 801617 bytes).
+Output written on exp_draft.pdf (18 pages, 830318 bytes).
 PDF statistics:
  532 PDF objects out of 1000 (max. 8388607)
  434 compressed objects within 5 object streams

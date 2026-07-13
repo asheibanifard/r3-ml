@@ -1,0 +1,12 @@
+{
+  "dtype": "float32",
+  "axis_order": "zyx",
+  "shape": [50, 50, 50],
+  "bounds_min": [-1, -1, -1],
+  "bounds_max": [1, 1, 1],
+  "voxel_size": [0.04, 0.04, 0.04],
+  "cutoff": 20,
+  "gaussian_count": 50000,
+  "value_min": 6592.93,
+  "value_max": 7456.3
+}

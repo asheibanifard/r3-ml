@@ -1,0 +1,41 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v2 (higher-budget retrain)
+#
+# Retrains the same 64 blocks (z,y,x in [30,33]) from config.yml with a much
+# larger Gaussian budget and a longer, explicitly-bounded densification window,
+# to test whether better per-block convergence reduces the cross-block "needle"
+# contamination found when stitching the v1 (config.yml) blocks -- see
+# ../REPORT.md section 4.3. v1's config.yml and models/blocks/ are left
+# untouched as the baseline/comparison point.
+#
+# Usage (see scripts/retrain_pilot_blocks_v2.sh for the full 64-block driver):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v2.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v2/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1
+max_gaussians: 50000      # v1 was 5000 -- 10x larger ceiling
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # v1 was 200
+steps_per_epoch: 50       # unchanged -- so total steps = 25000 (v1: 10000)
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+# Explicit window: start at epoch 10, stop at epoch 400, leaving epochs
+# 400-500 (steps 20000-25000) to stabilise on a frozen population -- same
+# "freeze near the end" pattern as configs/train_single_block.yml.
+densify_from_step:  500     # epoch 10  (10 * steps_per_epoch)
+densify_until_step: 20000   # epoch 400 (400 * steps_per_epoch)
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale,
+# prune-only phase, loss weights) are left at scripts/_3dgs/_3dgs.py's argparse
+# defaults, matching v1's approach of not retuning per-block.

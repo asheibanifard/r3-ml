@@ -1,0 +1,40 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config
+#
+# Used to fit each of the 64 individual 64^3 blocks (z,y,x in [30,33]) that make
+# up the 256^3 pilot region. Matches train_all_blocks.py's real production
+# defaults (n_init=1000, max_gaussians=5000) rather than inventing pilot-specific
+# hyperparameters, so results are representative of the actual whole-brain
+# pipeline. See ../REPORT.md section 4.1 for why the epoch budget is reduced
+# from the documented full 2000.
+#
+# Usage (see scripts/train_pilot_blocks.sh for the full 64-block driver):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true     # fused CUDA kernel, not the pure-PyTorch fallback
+flat_out:   true      # checkpoints land directly in --out, no timestamped subdir
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true       # no experiment tracking for this pilot
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # matches train_all_blocks.py production default
+max_gaussians: 5000       # matches train_all_blocks.py production default
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+# REDUCED from the documented full 2000 epochs for session-time feasibility
+# (64 blocks x concurrent batches). CLAUDE.md's own convergence table shows
+# ~200 epochs as "near convergence" for this exact n_init/max_gaussians config
+# on a single isolated block, so this is a reasonable but not fully-converged
+# budget -- see REPORT.md limitations (section 9) before treating per-block
+# vol_PSNR (~20 dB observed) as a quality ceiling.
+epochs:          200
+steps_per_epoch: 50
+
+# All other hyperparameters (LR schedule, densification schedule, loss weights)
+# are left at scripts/_3dgs/_3dgs.py's argparse defaults -- this pilot
+# deliberately did not retune them per-block.

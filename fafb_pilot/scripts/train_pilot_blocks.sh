@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+# Run from the repo root:
+#   bash fafb_pilot/scripts/train_pilot_blocks.sh
+
 Z0=30
 Y0=30
 X0=30
 N=4
 CONCURRENCY=16
-EPOCHS=200
-STEPS_PER_EPOCH=50
-N_INIT=1000
-MAX_GAUSS=5000
 
-OUT_ROOT="models_fafb_pilot/blocks"
-LOG_ROOT="/tmp/claude-0/-root-project/a0c2bf74-b908-4bbd-97ee-70b6409019f0/scratchpad/block_logs"
+CONFIG="fafb_pilot/config.yml"
+OUT_ROOT="fafb_pilot/models/blocks"
+LOG_ROOT="fafb_pilot/results/block_logs"
 mkdir -p "$LOG_ROOT"
 
 pids=()
@@ -35,14 +35,9 @@ for iz in $(seq 0 $((N-1))); do
       fi
 
       /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+        --config "$CONFIG" \
         --volume "$vol" \
-        --use_kernel \
-        --flat_out \
-        --no_swc_init \
-        --no_wandb \
         --out "$out" \
-        --n_init $N_INIT --max_gaussians $MAX_GAUSS \
-        --epochs $EPOCHS --steps_per_epoch $STEPS_PER_EPOCH \
         > "${LOG_ROOT}/${bname}.log" 2>&1 &
 
       pids+=($!)

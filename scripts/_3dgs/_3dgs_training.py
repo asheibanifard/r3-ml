@@ -304,6 +304,12 @@ def train_impl(
     densify_until  = getattr(cfg, 'densify_until_step',  None)
     prune_from     = getattr(cfg, 'prune_from_step',     None)
     prune_until    = getattr(cfg, 'prune_until_step',    None)
+    # Growth (clone/split) and pruning are decoupled onto independent cadences
+    # -- see split_and_clone()/prune_only() docstrings. prune_interval defaults
+    # to densify_interval when unset, and the standalone prune phase defaults
+    # to starting alongside densify (prune_from_step) unless overridden.
+    prune_interval = int(getattr(cfg, 'prune_interval', None) or cfg.densify_interval)
+    prune_from_active = prune_from if prune_from is not None else cfg.densify_from_step
 
     for epoch in epoch_bar:
         epoch_loss = torch.zeros((), device=device)
@@ -363,18 +369,18 @@ def train_impl(
                 and (densify_until is None or step <= densify_until)
                 and step % cfg.densify_interval == 0
             ):
-                n_pruned, n_cloned, n_split = gc.densify_and_prune(cfg)
+                n_cloned, n_split = gc.split_and_clone(cfg)
                 optimizer = make_optimizer(gc, cfg)
                 update_lr(optimizer, step, total_steps, cfg)
-                msg = (f"  [step {step:6d}] densify — "
-                       f"pruned {n_pruned:5d}  cloned {n_cloned:5d}  split {n_split:5d}  total {gc.N:6d}")
+                msg = (f"  [step {step:6d}] split/clone — "
+                       f"cloned {n_cloned:5d}  split {n_split:5d}  total {gc.N:6d}")
                 tqdm.write(msg)
                 log.write(f"# {msg.strip()}")
-            elif (
-                prune_from is not None
-                and step >= prune_from
+
+            if (
+                step >= prune_from_active
                 and (prune_until is None or step <= prune_until)
-                and step % cfg.densify_interval == 0
+                and step % prune_interval == 0
             ):
                 n_pruned = gc.prune_only(cfg)
                 if n_pruned > 0:

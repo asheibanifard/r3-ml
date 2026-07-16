@@ -1,0 +1,70 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v6 (significance-based pruning)
+#
+# v4 (5x threshold rebalance) and v5 (MSE+overlap regularizer, isolated) both
+# FAILED to prevent runaway growth: N hit the 150,000 safety ceiling by
+# epoch ~60-65/500 in both cases. Root cause (confirmed by direct code
+# reading): true clone/split demand (len(clone_idx)/len(split_idx) each
+# densify_interval) vastly exceeds any budget threshold tuning or loss-level
+# discouragement can suppress in time -- densify_and_prune()'s
+# `budget = max_n - survivors` bookkeeping only caps the SYMPTOM once N is
+# already at the ceiling, it does not reduce demand.
+#
+# v6 instead applies the "opacity + gradient informed" pruning strategy
+# surveyed in Ali et al. 2025, "Compression in 3D Gaussian Splatting: A
+# Survey of Methods, Trends, and Future Directions" (research/related_works/
+# 2502.19457v1.pdf, Fig. 4 / Section IV-A): Trimming the Fat and ELMGS remove
+# Gaussians that are simultaneously low-opacity AND low-gradient ("floaters"/
+# redundant Gaussians), reporting up to 75% of Gaussians removed with
+# negligible fidelity loss. See --significance_prune_percentile in
+# scripts/_3dgs/_3dgs.py for the implementation (dual-quantile AND, so
+# newly-cloned/split Gaussians -- legitimately low-opacity but high-gradient
+# -- are protected).
+#
+# This directly thins the survivor pool BEFORE clone/split candidates are
+# drawn each densify_and_prune() call, attacking the growth source itself
+# rather than post-hoc capping it. max_gaussians is kept at v4/v5's 150,000
+# purely as a safety ceiling -- if this mechanism works, N should plateau far
+# below it in a natural bell-curve (rise, peak, decline, stabilise), not hit
+# the ceiling at all.
+#
+# Usage (see scripts/train_pilot_blocks_v6_test.sh for the 2-block test driver):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v6.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v6_test/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1-v5
+max_gaussians: 150000     # safety ceiling only, same as v4/v5 -- not the mechanism under test
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # matches v2/v3/v4-test/v5-test for a directly comparable trajectory
+steps_per_epoch: 50
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+# v2's ORIGINAL values -- NOT v4's failed 5x rebalance. Isolates the new
+# significance-pruning mechanism as the only variable versus the v2 baseline.
+densify_from_step:   500     # epoch 10  (unchanged from v2-v5)
+densify_until_step:  20000   # epoch 400 (unchanged from v2-v5)
+# densify_grad_thresh / prune_inten_thresh: left at argparse defaults (2e-4 / 1e-3),
+# same as v2-v5.
+
+# ── Opacity + gradient informed significance pruning (NEW) ────────────────────
+# Bottom-30% quantile in BOTH opacity and avg-gradient (intersection), removed
+# every densify_and_prune() call. First-attempt calibration -- untuned.
+significance_prune_percentile: 0.3
+
+# lambda_overlap is NOT set here (0.0 / disabled) -- v6 isolates the pruning
+# mechanism on its own, not stacked with v5's overlap regularizer, so the two
+# fixes can be evaluated independently before considering combining them.
+
+# All other hyperparameters (LR schedule, loss weights) are left at
+# scripts/_3dgs/_3dgs.py's argparse defaults, matching v2/v3's approach.

@@ -815,6 +815,103 @@ class GaussianCloud:
                 self.reset_grad_acc()
         return int(n_pruned)
 
+    def split_and_clone(self, cfg: argparse.Namespace) -> Tuple[int, int]:
+        """Adaptive growth ONLY (clone / split) -- no pruning.
+
+        Decoupled from prune_only() so growth and pruning run on independent
+        cadences (--densify_interval for this method, --prune_interval for
+        prune_only()): growth reacts to per-step gradient signal, while a
+        recently-cloned/split Gaussian needs time to acquire opacity before
+        prune_only() judges it on intensity -- coupling them to the same
+        interval (the old densify_and_prune() behavior) meant every clone/
+        split event was immediately followed by a prune pass over Gaussians
+        that hadn't had a chance to become useful yet.
+
+        Dead Gaussians (out of AABB / negligible intensity) are excluded from
+        clone/split eligibility here but are NOT removed from the population
+        -- they are left in place for the next scheduled prune_only() call.
+
+        Returns
+        -------
+        (n_cloned, n_split) counts for logging.
+        """
+        device      = self.device
+        grad_thresh = cfg.densify_grad_thresh
+        max_scale   = cfg.densify_max_scale
+        max_n       = cfg.max_gaussians
+        divisor     = cfg.split_scale_divisor
+        log_floor   = cfg.log_scale_floor
+
+        with torch.no_grad():
+            avg_g  = self._grad_acc / self._grad_count.clamp(min=1.0)
+            curr_s = torch.exp(self.log_s).max(-1).values
+            in_box = self.aabb.to(device).contains(self.means)
+
+            high_g = avg_g  > grad_thresh
+            small  = curr_s < max_scale
+            dim    = F.softplus(self.inten) < cfg.prune_inten_thresh
+            alive  = in_box & ~dim
+
+            clone_idx = (high_g & small  & alive).nonzero(as_tuple=True)[0]
+            split_idx = (high_g & ~small & alive).nonzero(as_tuple=True)[0]
+
+            # Base pool is the FULL current population -- dead Gaussians are
+            # left in place for prune_only() to remove on its own cadence.
+            m  = self.means.detach().clone()
+            ls = self.log_s.detach().clone()
+            q  = self.quats.detach().clone()
+            iv = self.inten.detach().clone()
+            parts_m  = [m];  parts_ls = [ls]; parts_q = [q]; parts_iv = [iv]
+            n_cloned = 0
+            n_split  = 0
+
+            # ── Clone ────────────────────────────────────────────────────────
+            budget = max_n - m.shape[0]
+            if len(clone_idx) > 0 and budget > 0:
+                k         = min(len(clone_idx), budget)
+                clone_idx = clone_idx[:k]
+                cm, cls_, cq, civ = self._slice(clone_idx)
+                # Offset the clone by ≈ 1σ so it doesn't perfectly overlap
+                perturb   = torch.randn_like(cm) * torch.exp(cls_).mean(-1, keepdim=True)
+                parts_m.append(cm + perturb)
+                parts_ls.append(cls_)
+                parts_q.append(cq)
+                parts_iv.append(civ)
+                n_cloned += k
+                budget   -= k
+
+            # ── Split ────────────────────────────────────────────────────────
+            if len(split_idx) > 0 and budget >= 2:
+                k         = min(len(split_idx), budget // 2)
+                split_idx = split_idx[:k]
+                sm, sls, sq, siv = self._slice(split_idx)
+                s_s    = torch.exp(sls)
+                noise  = torch.randn_like(sm) * s_s
+                # Shrink daughters so they fit inside the parent's footprint
+                new_ls = torch.log(s_s / divisor).clamp(min=log_floor)
+                for sign in (+1, -1):
+                    parts_m.append(sm + sign * noise)
+                    parts_ls.append(new_ls)
+                    parts_q.append(sq.clone())
+                    parts_iv.append(siv.clone())
+                n_split += k
+
+                # Remove split parents from the base (replaced by daughters)
+                split_mask = torch.zeros(self.N, dtype=torch.bool, device=device)
+                split_mask[split_idx] = True
+                m2, ls2, q2, iv2 = self._slice(~split_mask)
+                parts_m[0] = m2;  parts_ls[0] = ls2
+                parts_q[0] = q2;  parts_iv[0] = iv2
+
+            # ── Assemble and assign ───────────────────────────────────────────
+            self._assign(
+                torch.cat(parts_m),  torch.cat(parts_ls),
+                torch.cat(parts_q),  torch.cat(parts_iv),
+            )
+            self.reset_grad_acc()
+
+        return int(n_cloned), int(n_split)
+
     def densify_and_prune(self, cfg: argparse.Namespace) -> Tuple[int, int]:
         """Adaptive density control (clone / split / prune).
 
@@ -1485,6 +1582,87 @@ def _loss_term_gradient(ctx: _LossContext) -> torch.Tensor:
     return F.l1_loss(pred_dx, gt_dx) + F.l1_loss(pred_dy, gt_dy)
 
 
+def _loss_term_overlap(ctx: _LossContext, n_query: int = 512,
+                       k_neighbors: int = 8) -> torch.Tensor:
+    """Pairwise overlap penalty: discourages redundant, co-located Gaussians.
+
+    For our unnormalised Gaussian convention g_k(x) = exp(-1/2 Mahalanobis),
+    the pairwise overlap integral has a closed form (Gaussian product /
+    convolution identity):
+
+        O_ij = (2*pi)^(3/2) |Sigma_i|^(1/2) |Sigma_j|^(1/2) |Sigma_i+Sigma_j|^(-1/2)
+               * exp( -1/2 * dmu^T (Sigma_i+Sigma_j)^-1 dmu ),   dmu = mu_i - mu_j
+
+    Weighted by v_i * v_j (post-softplus intensity product) so overlap between
+    two active Gaussians is penalised, leaving overlap involving an
+    already-dim Gaussian to the existing intensity-based pruning.
+
+    IMPORTANT: computed over actual k-nearest-neighbour pairs, not random
+    pairs. An earlier random-pair version diluted to ~0 at realistic
+    population sizes (verified empirically on a converged 50,000-Gaussian
+    checkpoint: mean overlap ~1e-9 regardless of sample size), because the
+    fraction of randomly-sampled pairs that are genuinely close shrinks as N
+    grows -- O_ij decaying to ~0 for distant pairs only helps if distant
+    pairs are excluded from the estimate, not averaged into it. A random
+    subset of n_query Gaussians instead searches for its k_neighbors nearest
+    neighbours (by Euclidean mean distance) among the FULL population via
+    torch.cdist, so the penalty is always evaluated on genuinely close pairs.
+    Cost O(n_query * N) for the neighbour search, independent of n_query^2.
+    Weight: cfg.lambda_overlap.
+    """
+    gc = ctx.gc
+    n_total = gc.means.shape[0]
+    device = gc.means.device
+    if n_total < 2:
+        return gc.means.new_zeros(())
+
+    n_query = min(int(n_query), n_total)
+    k = min(int(k_neighbors), n_total - 1)
+    if k < 1:
+        return gc.means.new_zeros(())
+
+    query_idx = torch.randperm(n_total, device=device)[:n_query]
+    query_means = gc.means[query_idx]                          # (q,3)
+
+    with torch.no_grad():
+        dists = torch.cdist(query_means, gc.means)             # (q,N)
+        dists[torch.arange(n_query, device=device), query_idx] = float('inf')
+        _, knn_idx = torch.topk(dists, k, dim=1, largest=False)  # (q,k)
+
+    q_scales = torch.exp(gc.log_s[query_idx]).clamp(min=1e-6)   # (q,3)
+    q_R      = quat_to_rotmat(gc.quats[query_idx])              # (q,3,3)
+    q_v      = F.softplus(gc.inten[query_idx])                  # (q,)
+    q_Sigma  = q_R @ torch.diag_embed(q_scales.pow(2)) @ q_R.transpose(-1, -2)  # (q,3,3)
+
+    n_means  = gc.means[knn_idx]                                # (q,k,3)
+    n_scales = torch.exp(gc.log_s[knn_idx]).clamp(min=1e-6)      # (q,k,3)
+    n_R      = quat_to_rotmat(gc.quats[knn_idx].reshape(-1, 4)).reshape(n_query, k, 3, 3)
+    n_v      = F.softplus(gc.inten[knn_idx])                     # (q,k)
+    n_Sigma  = n_R @ torch.diag_embed(n_scales.pow(2)) @ n_R.transpose(-1, -2)  # (q,k,3,3)
+
+    Sigma_sum = q_Sigma.unsqueeze(1) + n_Sigma                   # (q,k,3,3)
+    dmu       = query_means.unsqueeze(1) - n_means               # (q,k,3)
+
+    Sigma_sum_inv = torch.linalg.inv(Sigma_sum)                  # (q,k,3,3)
+    maha = torch.einsum('qki,qkij,qkj->qk', dmu, Sigma_sum_inv, dmu)  # (q,k)
+
+    log_det_q   = torch.log(torch.linalg.det(q_Sigma).clamp(min=1e-30))    # (q,)
+    log_det_n   = torch.log(torch.linalg.det(n_Sigma).clamp(min=1e-30))    # (q,k)
+    log_det_sum = torch.log(torch.linalg.det(Sigma_sum).clamp(min=1e-30))  # (q,k)
+
+    log_prefactor = (
+        1.5 * math.log(2.0 * math.pi)
+        + 0.5 * log_det_q.unsqueeze(1)
+        + 0.5 * log_det_n
+        - 0.5 * log_det_sum
+    )
+    overlap = torch.exp(log_prefactor - 0.5 * maha)              # (q,k)
+
+    weight = q_v.unsqueeze(1) * n_v                              # (q,k)
+
+    return (overlap * weight).mean()
+
+
 # Dispatch table: (name, weight_cfg_attr, term_fn)
 # weight_cfg_attr=None means the term is added unweighted (MSE).
 _LOSS_TERM_SPECS = (
@@ -1498,6 +1676,7 @@ _LOSS_TERM_SPECS = (
     ("L1_intensity",      "lambda_L1",              _loss_term_L1_intensity),
     ("coverage",          "lambda_coverage",        _loss_term_coverage),
     ("gradient",          "lambda_grad",            _loss_term_gradient),
+    ("overlap",           "lambda_overlap",          _loss_term_overlap),
 )
 
 
@@ -1532,9 +1711,17 @@ def _compute_loss_terms(ctx: _LossContext) -> tuple[torch.Tensor, dict[str, torc
     (scale_reg, scale_ceiling, scale_outlier, sparsity, anisotropy, count,
     L1_intensity, coverage) are replaced by a single fused CUDA kernel call.
     The MSE (+ SSIM) and gradient terms always run separately.
+
+    cfg.only_mse_overlap (bool, default False) strips the loss down to
+    exactly MSE + lambda_overlap * overlap, bypassing the fused 8-term
+    regularisation kernel and the gradient term entirely -- for isolating
+    the overlap penalty's effect on densification without any of the other
+    regularisers confounding the result. Set lambda_ssim=0 in the config
+    too if MSE should exclude the SSIM component baked into _loss_term_mse.
     """
     total = ctx.pred.new_zeros(())
     terms = {}
+    only_mse_overlap = bool(getattr(ctx.cfg, 'only_mse_overlap', False))
 
     if USE_CUDA_KERNEL:
         # MSE + SSIM (unweighted — weights baked inside _loss_term_mse)
@@ -1542,17 +1729,28 @@ def _compute_loss_terms(ctx: _LossContext) -> tuple[torch.Tensor, dict[str, torc
         terms['mse'] = mse
         total = total + mse
 
-        # Fused parameter-regularisation kernel (8 terms in one pass)
-        reg = gaussian_reg_loss(ctx.gc, ctx.cfg, ctx.dataset)
-        terms['reg'] = reg
-        total = total + reg
+        if not only_mse_overlap:
+            # Fused parameter-regularisation kernel (8 terms in one pass)
+            reg = gaussian_reg_loss(ctx.gc, ctx.cfg, ctx.dataset)
+            terms['reg'] = reg
+            total = total + reg
 
-        # Gradient sharpness (needs a separate gc.forward — keep in Python)
-        w_grad = float(getattr(ctx.cfg, 'lambda_grad', 0.0))
-        if w_grad > 0.0:
-            grad_term = _loss_term_gradient(ctx)
-            terms['gradient'] = grad_term
-            total = total + w_grad * grad_term
+            # Gradient sharpness (needs a separate gc.forward — keep in Python)
+            w_grad = float(getattr(ctx.cfg, 'lambda_grad', 0.0))
+            if w_grad > 0.0:
+                grad_term = _loss_term_gradient(ctx)
+                terms['gradient'] = grad_term
+                total = total + w_grad * grad_term
+
+        # Pairwise overlap penalty (not part of the fused per-Gaussian
+        # regularisation kernel — needs cross-Gaussian pairs — keep in Python)
+        w_overlap = float(getattr(ctx.cfg, 'lambda_overlap', 0.0))
+        if w_overlap > 0.0:
+            n_query = int(getattr(ctx.cfg, 'overlap_n_query', 512))
+            k_neighbors = int(getattr(ctx.cfg, 'overlap_k_neighbors', 8))
+            overlap_term = _loss_term_overlap(ctx, n_query=n_query, k_neighbors=k_neighbors)
+            terms['overlap'] = overlap_term
+            total = total + w_overlap * overlap_term
     else:
         for name, weight_attr, term_fn in _LOSS_TERM_SPECS:
             term        = term_fn(ctx)
@@ -2294,6 +2492,16 @@ def parse_args() -> argparse.Namespace:
                    help="Weight of SSIM slice loss in the reconstruction term (GaussianPile)")
     p.add_argument("--lambda_grad",   type=float, default=0.0,
                    help="Weight of gradient sharpness loss on Z-slice crops (edge preservation)")
+    p.add_argument("--lambda_overlap", type=float, default=0.0,
+                   help="Weight of pairwise Gaussian overlap penalty (discourages redundant, co-located Gaussians)")
+    p.add_argument("--overlap_n_query", type=int, default=512,
+                   help="Number of random query Gaussians per step for the k-NN overlap penalty")
+    p.add_argument("--overlap_k_neighbors", type=int, default=8,
+                   help="Number of nearest neighbours per query Gaussian for the overlap penalty")
+    p.add_argument("--only_mse_overlap", dest="only_mse_overlap", action="store_true",
+                   help="Strip the loss to exactly MSE + lambda_overlap*overlap, bypassing all other regularisers (isolation test)")
+    p.add_argument("--no_only_mse_overlap", dest="only_mse_overlap", action="store_false")
+    p.set_defaults(only_mse_overlap=False)
     p.add_argument("--grad_sample_weight", type=float, default=0.0,
                    help="Fraction of importance-sampling CDF mass given to high-gradient voxels (0=off, 0.5=equal mix)")
     p.add_argument("--interior_init_n", type=int, default=0,
@@ -2339,7 +2547,14 @@ def parse_args() -> argparse.Namespace:
                    help="End prune-only phase at this step (None = end of training)")
     p.add_argument("--densify_until_step",  type=int,   default=None,
                    help="Stop densification after this optimizer step; unset keeps it active to the end")
-    p.add_argument("--densify_interval",    type=int,   default=200)
+    p.add_argument("--densify_interval",    type=int,   default=200,
+                   help="Steps between split_and_clone() (growth-only) calls")
+    p.add_argument("--prune_interval",      type=int,   default=None,
+                   help="Steps between standalone prune_only() calls, decoupled from "
+                        "--densify_interval so growth and pruning run on independent "
+                        "cadences (a recently-cloned/split Gaussian needs time to "
+                        "acquire opacity before being judged by prune_only()). "
+                        "Defaults to --densify_interval if unset.")
     p.add_argument("--densify_grad_thresh", type=float, default=2e-4)
     p.add_argument("--densify_max_scale",   type=float, default=0.04)
     p.add_argument("--split_scale_divisor", type=float, default=1.6,

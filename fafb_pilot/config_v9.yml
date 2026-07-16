@@ -1,0 +1,71 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v9 (aggressive prune-only)
+#
+# v8 (UltraGauss/MRI-paper loss, standard/coupled cadence) confirmed the same
+# runaway-growth failure as v4-v7: N hit 150,000 by step 2200 (epoch 44) on
+# both b_000 and b_133 -- later than v7 (epoch ~24-26) but the same terminal
+# outcome. Across every version so far, clone/split counts have dwarfed prune
+# counts at every interval once N gets into the tens of thousands (e.g. v8
+# step 1800: cloned ~31k vs pruned only ~600) -- pruning has never had real
+# weight against growth.
+#
+# v4 already tried rebalancing growth AND pruning together (5x stricter
+# densify_grad_thresh + 5x more aggressive prune_inten_thresh) and still hit
+# the ceiling. v9 isolates the other half of that experiment: leave the
+# growth trigger (densify_grad_thresh / densify_max_scale) untouched at
+# defaults, and push pruning much harder on its own to see whether pruning
+# alone -- not paired with throttled growth -- can cap the population.
+#
+# Changes from v8:
+#   - prune_inten_thresh raised 1e-3 -> 1e-2 (10x default, 2x v4's 5x bump):
+#     far more Gaussians qualify as "dim"/dead at each prune_only() check.
+#   - prune_interval lowered 200 -> 50 (4x more often than densify_interval,
+#     which stays at 200): dim Gaussians get judged and removed well before
+#     they've had multiple growth cycles to spawn further clones/splits.
+#     This does cut against the decoupling rationale in v7 (a recently-
+#     cloned/split Gaussian gets less time to acquire opacity before being
+#     judged) -- that tradeoff is deliberate here: we want to know if
+#     aggressive pruning alone can win, even at the cost of occasionally
+#     culling a Gaussian too early.
+#
+# Loss and growth cadence are otherwise identical to v8 (only_mse_overlap +
+# lambda_ssim=0.7:0.3 L1:SSIM ratio; densify_interval=200, densify_grad_thresh/
+# densify_max_scale/split_scale_divisor at argparse defaults).
+#
+# Usage (see fafb_pilot/scripts/train_pilot_blocks_v9_test.sh for the 2-block
+# test driver, same b_000 / b_133 blocks as v2-v8):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v9.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v9_test/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1-v8
+max_gaussians: 150000     # safety ceiling only, same as v4-v8
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # matches v2-v8 for a comparable trajectory
+steps_per_epoch: 50
+
+# ── Densification: growth unchanged, pruning made much more aggressive ────────
+densify_from_step:   500     # epoch 10   (unchanged from v2-v8)
+densify_until_step:  20000   # epoch 400  (unchanged from v2-v8)
+densify_interval:    200     # argparse default -- split_and_clone() cadence, unchanged from v8
+prune_interval:       50     # 4x more frequent than densify_interval (was 200 in v8)
+prune_inten_thresh:  0.01    # 10x default (was argparse default 1e-3 in v8)
+# densify_grad_thresh / densify_max_scale: argparse defaults (2e-4 / 0.04),
+# deliberately untouched -- isolating pruning aggressiveness from growth throttling.
+
+# ── Loss: UltraGauss/MRI-paper shape, L1:SSIM = 0.7:0.3 ratio (unchanged from v8) ──
+only_mse_overlap: true
+lambda_ssim:      0.428571   # 0.3/0.7 -- see v8 loss-ratio note
+
+# All other hyperparameters (LR schedule, split_scale_divisor, etc.) are left
+# at scripts/_3dgs/_3dgs.py's argparse defaults.

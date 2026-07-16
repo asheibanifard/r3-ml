@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.12)  12 JUL 2026 21:14
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.7.12)  13 JUL 2026 14:35
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -6,60 +6,6 @@ entering extended mode
 (./exp_draft.tex
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-01-22>
-
-! LaTeX Error: Missing \begin{document}.
-
-See the LaTeX manual or LaTeX Companion for explanation.
-Type  H <return>  for immediate help.
- ...                                              
-                                                  
-l.1 f
-     rom pathlib import Path
-? 
-Missing character: There is no f in font nullfont!
-Missing character: There is no r in font nullfont!
-Missing character: There is no o in font nullfont!
-Missing character: There is no m in font nullfont!
-Missing character: There is no p in font nullfont!
-Missing character: There is no a in font nullfont!
-Missing character: There is no t in font nullfont!
-Missing character: There is no h in font nullfont!
-Missing character: There is no l in font nullfont!
-Missing character: There is no i in font nullfont!
-Missing character: There is no b in font nullfont!
-Missing character: There is no i in font nullfont!
-Missing character: There is no m in font nullfont!
-Missing character: There is no p in font nullfont!
-Missing character: There is no o in font nullfont!
-Missing character: There is no r in font nullfont!
-Missing character: There is no t in font nullfont!
-Missing character: There is no P in font nullfont!
-Missing character: There is no a in font nullfont!
-Missing character: There is no t in font nullfont!
-Missing character: There is no h in font nullfont!
-
-Overfull \hbox (20.0pt too wide) in paragraph at lines 1--2
-[]
- []
-
-
-! LaTeX Error: Missing \begin{document}.
-
-See the LaTeX manual or LaTeX Companion for explanation.
-Type  H <return>  for immediate help.
- ...                                              
-                                                  
-l.3 t
-     ex = r"""
-? 
-Missing character: There is no t in font nullfont!
-Missing character: There is no e in font nullfont!
-Missing character: There is no x in font nullfont!
-Missing character: There is no = in font nullfont!
-Missing character: There is no r in font nullfont!
-Missing character: There is no " in font nullfont!
-Missing character: There is no " in font nullfont!
-Missing character: There is no " in font nullfont!
 (/usr/share/texlive/texmf-dist/tex/latex/base/article.cls
 Document Class: article 2023/05/17 v1.4n Standard LaTeX document class
 (/usr/share/texlive/texmf-dist/tex/latex/base/size11.clo
@@ -71,17 +17,12 @@ File: size11.clo 2023/05/17 v1.4n Standard LaTeX file (size option)
 \c@subsubsection=\count190
 \c@paragraph=\count191
 \c@subparagraph=\count192
-
-Overfull \hbox (20.0pt too wide) in paragraph at lines 3--274
-[]
- []
-
 \c@figure=\count193
 \c@table=\count194
 \abovecaptionskip=\skip48
 \belowcaptionskip=\skip49
 \bibindent=\dimen140
-[1{/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}])
+)
 (/usr/share/texlive/texmf-dist/tex/latex/geometry/geometry.sty
 Package: geometry 2020/01/02 v5.9 Page Geometry
 
@@ -495,9 +436,9 @@ Package: longtable 2023-11-01 v4.19 Multi-page Table package (DPC)
 \c@LT@chunks=\count318
 \LT@p@ftn=\toks28
 )
-Package hyperref Info: Option `colorlinks' set `true' on input line 22.
+Package hyperref Info: Option `colorlinks' set `true' on input line 20.
 Package translations Info: No language package found. I am going to use `englis
-h' as default language. on input line 39.
+h' as default language. on input line 37.
 
 (/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def
 File: l3backend-pdftex.def 2024-01-04 L3 backend support: PDF output (pdfTeX)
@@ -507,24 +448,24 @@ File: l3backend-pdftex.def 2024-01-04 L3 backend support: PDF output (pdfTeX)
 (./exp_draft.aux)
 \openout1 = `exp_draft.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 39.
-LaTeX Font Info:    ... okay on input line 39.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 37.
+LaTeX Font Info:    ... okay on input line 37.
 
 *geometry* driver: auto-detecting
 *geometry* detected driver: pdftex
@@ -591,7 +532,7 @@ Package caption Info: longtable package is loaded.
 Package: ltcaption 2021/01/08 v1.4c longtable captions (AR)
 )
 Package caption Info: End \AtBeginDocument code.
-Package hyperref Info: Link coloring ON on input line 39.
+Package hyperref Info: Link coloring ON on input line 37.
 
 (./exp_draft.out) (./exp_draft.out)
 \@outlinefile=\write3
@@ -604,116 +545,119 @@ File: translations-basic-dictionary-english.trsl (english translation file `tra
 nslations-basic-dictionary')
 )
 Package translations Info: loading dictionary `translations-basic-dictionary' f
-or `english'. on input line 39.
-LaTeX Font Info:    Trying to load font information for U+msa on input line 42.
+or `english'. on input line 37.
+LaTeX Font Info:    Trying to load font information for U+msa on input line 40.
 
  (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 42.
+LaTeX Font Info:    Trying to load font information for U+msb on input line 40.
 
 
 (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsb.fd
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
-)
-Overfull \hbox (74.48767pt too wide) detected at line 67
-[] \OMS/cmsy/m/n/10.95 ! [] ! [] ! [] ! []\OML/cmm/m/it/10.95 :
- []
+) [1
 
-[2
+{/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}] [2] [3]
+</root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_fp
+s_vs_active_gaussians.pdf, id=104, 534.11122pt x 353.56355pt>
+File: /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/r
+q1_fps_vs_active_gaussians.pdf Graphic file (type pdf)
+<use /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_fps_vs_active_gaussians.pdf>
+Package pdftex.def Info: /root/project/scripts/render_scripts/RQ1/results/rq1_m
+ultiblock/figures/rq1_fps_vs_active_gaussians.pdf  used on input line 272.
+(pdftex.def)             Requested size: 398.61395pt x 263.87181pt.
+</root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_re
+nder_time_vs_active_gaussians.pdf, id=106, 534.23227pt x 353.56355pt>
+File: /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/r
+q1_render_time_vs_active_gaussians.pdf Graphic file (type pdf)
+<use /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_render_time_vs_active_gaussians.pdf>
+Package pdftex.def Info: /root/project/scripts/render_scripts/RQ1/results/rq1_m
+ultiblock/figures/rq1_render_time_vs_active_gaussians.pdf  used on input line 2
+94.
+(pdftex.def)             Requested size: 398.61395pt x 263.81247pt.
+ [4 </root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_fps_vs_active_gaussians.pdf>]
+[5 </root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1
+_render_time_vs_active_gaussians.pdf>]
+</root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_re
+nder_time_vs_tile_pairs.pdf, id=261, 533.88086pt x 353.56355pt>
+File: /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/r
+q1_render_time_vs_tile_pairs.pdf Graphic file (type pdf)
+<use /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_render_time_vs_tile_pairs.pdf>
+Package pdftex.def Info: /root/project/scripts/render_scripts/RQ1/results/rq1_m
+ultiblock/figures/rq1_render_time_vs_tile_pairs.pdf  used on input line 393.
+(pdftex.def)             Requested size: 398.61395pt x 263.9797pt.
+</root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_fu
+ll_payload_block_comparison.pdf, id=263, 561.90579pt x 352.76973pt>
+File: /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/r
+q1_full_payload_block_comparison.pdf Graphic file (type pdf)
+<use /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_full_payload_block_comparison.pdf>
+Package pdftex.def Info: /root/project/scripts/render_scripts/RQ1/results/rq1_m
+ultiblock/figures/rq1_full_payload_block_comparison.pdf  used on input line 413
+.
+(pdftex.def)             Requested size: 371.43698pt x 233.20015pt.
+ [6 </root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_render_time_vs_tile_pairs.pdf>]
+[7 </root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1
+_full_payload_block_comparison.pdf>]
+</root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_no
+rmalised_time_vs_retention.pdf, id=387, 534.52524pt x 353.56355pt>
+File: /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/r
+q1_normalised_time_vs_retention.pdf Graphic file (type pdf)
+<use /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_normalised_time_vs_retention.pdf>
+Package pdftex.def Info: /root/project/scripts/render_scripts/RQ1/results/rq1_m
+ultiblock/figures/rq1_normalised_time_vs_retention.pdf  used on input line 522.
 
-] [3] [4]
-<plots/vol_rec_slices_block_z000_y001_x006.pdf, id=221, 857.88933pt x 859.77711
-pt>
-File: plots/vol_rec_slices_block_z000_y001_x006.pdf Graphic file (type pdf)
-<use plots/vol_rec_slices_block_z000_y001_x006.pdf>
-Package pdftex.def Info: plots/vol_rec_slices_block_z000_y001_x006.pdf  used on
- input line 362.
-(pdftex.def)             Requested size: 317.07614pt x 317.77145pt.
- [5]
-Overfull \hbox (50.70699pt too wide) in paragraph at lines 391--398
- [][] 
- []
-
-[6 <./plots/vol_rec_slices_block_z000_y001_x006.pdf>]
-Overfull \hbox (6.26718pt too wide) in paragraph at lines 415--422
- [][] 
- []
-
-[7] [8] [9]
-Overfull \hbox (60.57683pt too wide) in paragraph at lines 639--649
- [][] 
- []
-
-[10] [11] [12] [13]
-Overfull \hbox (53.09467pt too wide) in paragraph at lines 833--840
- [][] 
- []
-
-[14] [15] [16] [17]
-Underfull \hbox (badness 10000) in paragraph at lines 1009--1010
-[]|\OT1/cmr/m/n/10.95 Payload sweep, FPS curves,
- []
-
-
-Underfull \hbox (badness 7796) in paragraph at lines 1011--1012
-[]|\OT1/cmr/m/n/10.95 One-, two-, four-, and eight-
- []
-
-
-Underfull \hbox (badness 2351) in paragraph at lines 1015--1016
-[]|\OT1/cmr/m/n/10.95 Cross-hardware curves, fea-si-bil-ity
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 1017--1018
-[]|\OT1/cmr/m/n/10.95 Culling, pre-ci-sion, sam-pling,
- []
-
-
-Overfull \hbox (37.90596pt too wide) in paragraph at lines 1027--1043
- [][] 
- []
-
-[18] (./exp_draft.aux)
+(pdftex.def)             Requested size: 371.43698pt x 245.69627pt.
+</root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_qu
+alitative_reconstructions.pdf, id=389, 933.4769pt x 601.045pt>
+File: /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/r
+q1_qualitative_reconstructions.pdf Graphic file (type pdf)
+<use /root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_qualitative_reconstructions.pdf>
+Package pdftex.def Info: /root/project/scripts/render_scripts/RQ1/results/rq1_m
+ultiblock/figures/rq1_qualitative_reconstructions.pdf  used on input line 549.
+(pdftex.def)             Requested size: 443.9066pt x 285.82033pt.
+ [8 </root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq
+1_normalised_time_vs_retention.pdf>]
+[9 </root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1
+_qualitative_reconstructions.pdf>] [10] (./exp_draft.aux)
  ***********
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-01-22>
  ***********
-
-
-LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
-
 Package rerunfilecheck Info: File `exp_draft.out' has not changed.
-(rerunfilecheck)             Checksum: 24CA8DB8129FD50B4CE9B9BE2FC6DEE0;6882.
+(rerunfilecheck)             Checksum: 7006D42895EEB0088B9817460FC57579;2892.
  ) 
 Here is how much of TeX's memory you used:
- 16631 strings out of 476106
- 318583 string characters out of 5793933
- 1941975 words of memory out of 5000000
- 38305 multiletter control sequences out of 15000+600000
- 568584 words of font info for 74 fonts, out of 8000000 for 9000
+ 16492 strings out of 476106
+ 321008 string characters out of 5793933
+ 1937975 words of memory out of 5000000
+ 38280 multiletter control sequences out of 15000+600000
+ 566290 words of font info for 67 fonts, out of 8000000 for 9000
  59 hyphenation exceptions out of 8191
- 75i,12n,79p,455b,1006s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 75i,10n,79p,558b,1004s stack positions out of 10000i,1000n,20000p,200000b,200000s
  </root/.texlive2023/texmf-var/fonts/pk/ljfour/jknappen/ec/tcrm1095.600pk></u
 sr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></usr/sha
 re/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/share/tex
-live/texmf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb></usr/share/texlive/t
-exmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texlive/texmf-d
-ist/fonts/type1/public/amsfonts/cm/cmmi6.pfb></usr/share/texlive/texmf-dist/fon
-ts/type1/public/amsfonts/cm/cmmi8.pfb></usr/share/texlive/texmf-dist/fonts/type
-1/public/amsfonts/cm/cmmib10.pfb></usr/share/texlive/texmf-dist/fonts/type1/pub
-lic/amsfonts/cm/cmr10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/ams
-fonts/cm/cmr12.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/c
-m/cmr17.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr6.
-pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8.pfb></us
-r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/shar
-e/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/share/texli
-ve/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb>
-Output written on exp_draft.pdf (18 pages, 801617 bytes).
+live/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texlive/t
+exmf-dist/fonts/type1/public/amsfonts/cm/cmmi8.pfb></usr/share/texlive/texmf-di
+st/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/share/texlive/texmf-dist/font
+s/type1/public/amsfonts/cm/cmr17.pfb></usr/share/texlive/texmf-dist/fonts/type1
+/public/amsfonts/cm/cmr8.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/
+amsfonts/cm/cmsy10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfon
+ts/cm/cmsy8.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/c
+mtt10.pfb>
+Output written on exp_draft.pdf (10 pages, 748184 bytes).
 PDF statistics:
- 532 PDF objects out of 1000 (max. 8388607)
- 434 compressed objects within 5 object streams
- 166 named destinations out of 1000 (max. 500000)
- 326 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 650 PDF objects out of 1000 (max. 8388607)
+ 270 compressed objects within 3 object streams
+ 59 named destinations out of 1000 (max. 500000)
+ 159 words of extra memory for PDF output out of 10000 (max. 10000000)
 

@@ -1,5 +1,6 @@
 # reconstruct the volume from the Gaussian cloud
 import csv
+import os
 import sys, argparse, torch, numpy as np, matplotlib.pyplot as plt
 import torch.nn.functional as F
 sys.path.insert(0, '/root/project/scripts')
@@ -11,6 +12,7 @@ from _3dgs._3dgs import GaussianCloud, AABB, VolumeDataset
 from _3dgs._3dgs_training import _load_volume
 
 device = torch.device('cuda')
+os.makedirs("/root/project/fafb_pilot/code/representation/figures", exist_ok=True)
 
 # smoke_data blocks are 50^3 (see configs/smoke_config.yml) -> ssim_crop must match
 cfg = argparse.Namespace(
@@ -22,13 +24,16 @@ cfg = argparse.Namespace(
 )
 
 # --- load GT volume (ground truth) ---
-vol_t, _, _ = _load_volume('/root/project/data/smoke_data/blocks/block_z0_y1_x6.h5')
+# _load_volume normalises to [0,1] the same way every block was normalised at
+# training time -- a raw tifffile.imread() is uint8 [0,255] and would make
+# every metric below (MSE/PSNR/SSIM) meaningless against pred_vol's [0,1] range.
+vol_t, _, _ = _load_volume('/root/project/data/fafb/blocks/image_z32_y31_x32.tif')
 aabb    = AABB.unit()
 dataset = VolumeDataset(vol_t, aabb, cfg)
 D, H, W = dataset.D, dataset.H, dataset.W
 
 # --- load model directly via GaussianCloud.load (handles the .pth checkpoint format) ---
-ckpt_path = '/root/project/models_smoke/block_z000_y001_x006/best.pth'
+ckpt_path = '/root/project/fafb_pilot/models/blocks_v2/b_212/best.pth'
 gc = GaussianCloud.load(ckpt_path, aabb, device, cfg)
 print(f"Loaded {gc.N} Gaussians from {ckpt_path}")
 
@@ -65,11 +70,11 @@ fig, axes = plt.subplots(1, 2, figsize=(8, 4))
 axes[0].imshow(vol_t[mid].numpy(), cmap='gray', vmin=0, vmax=1); axes[0].set_title(f"GT   Z={mid}"); axes[0].axis('off')
 axes[1].imshow(pred_vol[mid],      cmap='gray', vmin=0, vmax=1); axes[1].set_title(f"Pred Z={mid}"); axes[1].axis('off')
 plt.tight_layout()
-out_png = "/root/project/scripts/eval_scripts/vol_rec_mid_slice.png"
+out_png = f"/root/project/fafb_pilot/code/representation/figures/vol_rec_mid_slice_{ckpt_path.split('/')[-2].split('.')[0]}.png"
 fig.savefig(out_png, dpi=150)
 print(f"Saved {out_png}")
 
-np.save(f"/root/project/scripts/eval_scripts/rec_{ckpt_path.split('/')[-2].split('.')[0]}.npy", pred_vol)
+np.save(f"/root/project/fafb_pilot/code/representation/figures/rec_{ckpt_path.split('/')[-2].split('.')[0]}.npy", pred_vol)
 
 # define ssim 
 def ssim(img1, img2, C1=0.01**2, C2=0.03**2):
@@ -83,7 +88,7 @@ def ssim(img1, img2, C1=0.01**2, C2=0.03**2):
     ssim_index = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2))
     return ssim_index
 # save the metrics in csv file by comparing volumes MSE PSNR SSIM Max Error Output Min Output Max
-with open(f"/root/project/scripts/eval_scripts/metrics_{ckpt_path.split('/')[-2].split('.')[0]}.csv", 'w', newline='') as csvfile:
+with open(f"/root/project/fafb_pilot/code/representation/figures/metrics_{ckpt_path.split('/')[-2].split('.')[0]}.csv", 'w', newline='') as csvfile:
     fieldnames = ['MSE', 'PSNR', 'SSIM', 'Max Error', 'Output Min', 'Output Max']
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
     writer.writeheader()
@@ -167,7 +172,7 @@ plt.tight_layout()
 block_name = ckpt_path.split("/")[-2].split(".")[0]
 
 out_pdf = (
-    f"/root/project/scripts/eval_scripts/"
+    f"/root/project/fafb_pilot/code/representation/figures/"
     f"vol_rec_slices_{block_name}.pdf"
 )
 
@@ -177,6 +182,23 @@ fig.savefig(
     bbox_inches="tight",
 )
 
+
 plt.close(fig)
 
 print(f"Saved {out_pdf}")
+
+# save high quality pred_slice to fafb_pilot/code/representation/figures dpi=800 using PIL.Image.save
+for i, pred_slice in enumerate(pred_slices):
+    from PIL import Image
+
+    img = Image.fromarray((pred_slice * 255).astype(np.uint8))
+    img.save(
+        f"/root/project/fafb_pilot/code/representation/figures/pred_{titles[i]}_{block_name}.png",
+        dpi=(800, 800),
+    )
+
+    gt_img = Image.fromarray((gt_slices[i] * 255).astype(np.uint8))
+    gt_img.save(
+        f"/root/project/fafb_pilot/code/representation/figures/gt_{titles[i]}_{block_name}.png",
+        dpi=(800, 800),
+    )

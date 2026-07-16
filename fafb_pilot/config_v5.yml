@@ -1,0 +1,70 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v5 (overlap regularizer test)
+#
+# Tests a NEW pairwise-overlap loss term (lambda_overlap, see
+# _loss_term_overlap in scripts/_3dgs/_3dgs.py) as a more direct fix for the
+# runaway-growth problem than the v4 threshold rebalancing attempt, which
+# failed (N hit a 150,000 safety ceiling by epoch 65/5000, ~1.3% of budget,
+# despite 5x stricter densify_grad_thresh/prune_inten_thresh).
+#
+# Deliberately isolates the new mechanism: densify_grad_thresh and
+# prune_inten_thresh are left at v2's ORIGINAL (unmodified) values here, not
+# v4's failed rebalance -- the only new lever in this config is
+# lambda_overlap. This is a real, differentiable penalty on pairwise
+# Gaussian overlap (closed-form Gaussian-product integral, computed over
+# actual k-nearest-neighbour pairs, not random pairs -- an earlier random-pair
+# version was verified empirically to dilute to ~0 at realistic population
+# sizes). The intent is for this to reduce clone_idx pool size at the source
+# (fewer genuinely "under-fit" high-gradient signals once nearby Gaussians
+# are discouraged from redundantly stacking), rather than trying to out-prune
+# an enormous clone-qualifying pool after the fact.
+#
+# lambda_overlap=50000 is a first-attempt calibration: on a real converged
+# checkpoint (v2 b_000, 50,000 Gaussians), the raw overlap term evaluates to
+# ~1e-6, so this weight brings the term to roughly 0.01-0.1 in absolute
+# contribution -- a real but not loss-dominating influence. Not yet tuned.
+#
+# Usage (see scripts/train_pilot_blocks_v5_test.sh for the 2-block test driver):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v5.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v5_test/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1/v2/v3/v4
+max_gaussians: 150000     # same safety ceiling as v4 -- not the mechanism under test
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # matches v2/v3 for a directly comparable early trajectory
+steps_per_epoch: 50
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+# v2's ORIGINAL values -- NOT v4's failed 5x rebalance. Isolates the overlap
+# term as the only new variable versus the v2 baseline.
+densify_from_step:   500     # epoch 10  (unchanged from v2/v3/v4)
+densify_until_step:  20000   # epoch 400 (unchanged from v2/v3)
+# densify_grad_thresh / prune_inten_thresh: left at argparse defaults (2e-4 / 1e-3),
+# same as v2/v3.
+
+# ── Pairwise overlap penalty (NEW) ─────────────────────────────────────────────
+lambda_overlap:       50000    # first-attempt calibration, see header
+overlap_n_query:      512      # random query Gaussians per step
+overlap_k_neighbors:  8        # nearest neighbours per query
+
+# ── Isolation: total loss = MSE + overlap only ─────────────────────────────────
+# Strips out the fused 8-term regularisation kernel (scale_reg, scale_ceiling,
+# scale_outlier, sparsity, anisotropy, count, L1_intensity, coverage) and the
+# gradient term entirely, so the overlap term's effect on densification can be
+# observed without any other regulariser confounding the result.
+only_mse_overlap: true
+lambda_ssim:      0.0     # SSIM is otherwise baked into the MSE term -- zero it too
+
+# All other hyperparameters (LR schedule, densify_max_scale) are left at
+# scripts/_3dgs/_3dgs.py's argparse defaults.

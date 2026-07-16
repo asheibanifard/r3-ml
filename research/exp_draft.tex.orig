@@ -1,0 +1,637 @@
+
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,multirow,array}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{siunitx}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{longtable}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{TODO:} #1}}
+\newcommand{\placeholder}[1]{\fbox{\parbox[c][4cm][c]{0.92\linewidth}{\centering #1}}}
+\newcommand{\fps}{\mathrm{FPS}}
+\newcommand{\tframe}{T_{\mathrm{frame}}}
+\newcommand{\trender}{T_{\mathrm{render}}}
+\newcommand{\ttransition}{T_{\mathrm{transition}}}
+\newcommand{\ractive}{R_{\mathrm{active}}}
+\newcommand{\rloaded}{R_{\mathrm{loaded}}}
+\newcommand{\rrenderer}{R_{\mathrm{renderer}}}
+\newcommand{\pcand}{P_{\mathrm{cand}}}
+
+\title{Experimental Evaluation of Real-Time Multi-Block Gaussian Volume Rendering}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Experimental Objectives}
+
+
+\subsection{RQ1: Scalability of Active Gaussian Payload Across Multiple Blocks}
+
+\subsubsection{Research Question}
+
+\textbf{RQ1: How does active Gaussian payload affect steady-state rendering
+speed across multiple pretrained blocks on a fixed GPU?}
+
+\subsubsection{Objective}
+
+This experiment evaluates how steady-state rendering performance changes as
+the active Gaussian payload increases. Unlike the preliminary single-block
+evaluation, the final experiment uses five independently pretrained blocks to
+measure whether the observed payload--performance relationship remains
+consistent across different Gaussian spatial distributions.
+
+The experiment addresses payload scalability only. GPU-memory normalisation,
+cross-hardware comparison, and the derivation of a deployment threshold are
+reserved for subsequent research questions.
+
+\subsubsection{Experimental Setup}
+
+The evaluation was conducted using five pretrained Gaussian blocks:
+
+\begin{itemize}
+    \item \texttt{gaussians\_016},
+    \item \texttt{gaussians\_017},
+    \item \texttt{gaussians\_026},
+    \item \texttt{gaussians\_027}, and
+    \item \texttt{gaussians\_028}.
+\end{itemize}
+
+Each block contained $50{,}000$ Gaussians, and each Gaussian record occupied
+44 bytes. The experiments were performed on an NVIDIA RTX 5000 Ada Generation
+GPU with approximately 32~GB of VRAM and CUDA compute capability 8.9.
+
+All rendering parameters were held constant across blocks, payload levels,
+and repetitions. The fixed settings are summarised in
+Table~\ref{tab:rq1_multiblock_settings}.
+
+\begin{table}[H]
+\centering
+\caption{Fixed rendering settings for the multi-block RQ1 experiment.}
+\label{tab:rq1_multiblock_settings}
+\begin{tabular}{lc}
+\toprule
+Parameter & Value \\
+\midrule
+GPU & NVIDIA RTX 5000 Ada Generation \\
+Image resolution & $128 \times 128$ \\
+Depth samples per ray & 64 \\
+Vertical field of view & $90^{\circ}$ \\
+Camera position & $(0,0,0)$ \\
+Camera rotation & $(0^{\circ},0^{\circ},0^{\circ})$ \\
+Rendering bounds & $[-1,1]^3$ \\
+Tile size & $16 \times 16$ \\
+Mahalanobis cutoff & 20 \\
+Warm-up frames & 20 \\
+Measured frames & 300 \\
+Timing repetitions & 5 \\
+Gaussians per full block & $50{,}000$ \\
+Bytes per Gaussian & 44 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Payload Construction}
+
+For each block, one fixed shuffled Gaussian ordering was generated using a
+constant random seed. This prevents the experiment from depending on the
+original ordering of the Gaussian records.
+
+The same ordering was reused for every payload level and every timing
+repetition. Consequently, the subsets for each block were nested:
+
+\begin{equation}
+\mathcal{G}^{(b)}_{10\%}
+\subset
+\mathcal{G}^{(b)}_{20\%}
+\subset
+\mathcal{G}^{(b)}_{30\%}
+\subset
+\cdots
+\subset
+\mathcal{G}^{(b)}_{100\%},
+\end{equation}
+
+where $b$ denotes a block.
+
+The evaluated retention ratios were
+
+\begin{equation}
+\rho \in
+\left\{
+0.10,
+0.20,
+0.30,
+0.40,
+0.50,
+0.60,
+0.75,
+1.00
+\right\}.
+\end{equation}
+
+For each block and retention ratio, the active Gaussian population was
+
+\begin{equation}
+N_{\mathrm{active}}
+=
+\rho N_{\mathrm{full}},
+\end{equation}
+
+where
+
+\begin{equation}
+N_{\mathrm{full}}=50{,}000.
+\end{equation}
+
+The raw active payload was calculated as
+
+\begin{equation}
+B_{\mathrm{active}}
+=
+N_{\mathrm{active}}
+\times
+44\text{ bytes}.
+\end{equation}
+
+The resulting raw payload was approximately 0.210~MiB at $5{,}000$
+Gaussians and 2.098~MiB at $50{,}000$ Gaussians.
+
+\subsubsection{Timing Protocol}
+
+Renderer construction and preprocessing were excluded from steady-state
+timing. The excluded stages were:
+
+\begin{itemize}
+    \item Gaussian binary loading,
+    \item subset generation,
+    \item CUDA allocation,
+    \item host-to-device transfer,
+    \item Gaussian preprocessing,
+    \item tile binning,
+    \item prefix scan,
+    \item Gaussian--tile duplication,
+    \item radix sorting,
+    \item tile-range construction,
+    \item output download, and
+    \item image and CSV writing.
+\end{itemize}
+
+For every block and payload level, 20 untimed warm-up frames were rendered.
+This was followed by 300 individually timed frames using CUDA events. Every
+configuration was repeated five times.
+
+The total number of benchmark runs was therefore
+
+\begin{equation}
+5\text{ blocks}
+\times
+8\text{ payload levels}
+\times
+5\text{ repetitions}
+=
+200\text{ runs}.
+\end{equation}
+
+For each measured frame $j$, rendering speed was calculated as
+
+\begin{equation}
+\mathrm{FPS}_j
+=
+\frac{1000}{T_j},
+\end{equation}
+
+where $T_j$ is the frame time in milliseconds.
+
+The primary outcome was median FPS. Median render time, fifth-percentile FPS,
+Gaussian--tile pair count, and variation across repeated measurements were
+also recorded.
+
+\subsubsection{Aggregate Results}
+
+Table~\ref{tab:rq1_multiblock_results} presents the mean performance across
+the five blocks at each payload level. Each reported value first aggregates
+the five timing repetitions for a block and then averages across the five
+blocks.
+
+\begin{table}[H]
+\centering
+\caption{Aggregate RQ1 results across five pretrained Gaussian blocks.}
+\label{tab:rq1_multiblock_results}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{rrrrrrr}
+\toprule
+Retention &
+Active Gaussians &
+Payload (MiB) &
+Mean Tile Pairs &
+Mean Median Time (ms) &
+Mean Median FPS &
+Mean p5 FPS \\
+\midrule
+10\%  & 5,000  & 0.210 & 77,938  & 3.028  & 330.58 & 329.57 \\
+20\%  & 10,000 & 0.420 & 156,358 & 6.047  & 165.58 & 165.46 \\
+30\%  & 15,000 & 0.629 & 232,872 & 8.979  & 111.51 & 111.48 \\
+40\%  & 20,000 & 0.839 & 309,243 & 11.903 & 84.11  & 84.08 \\
+50\%  & 25,000 & 1.049 & 385,166 & 14.806 & 67.61  & 67.59 \\
+60\%  & 30,000 & 1.259 & 462,053 & 17.758 & 56.36  & 56.36 \\
+75\%  & 37,500 & 1.574 & 578,396 & 22.224 & 45.04  & 45.03 \\
+100\% & 50,000 & 2.098 & 768,733 & 29.554 & 33.87  & 33.86 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+The complete multi-block experiment contains 200 measurements covering all
+five blocks, eight payload ratios, and five repetitions. 
+\subsubsection{Rendering Performance}
+
+Figure~\ref{fig:rq1_fps_gaussians} shows the effect of active Gaussian count
+on rendering speed across all five pretrained blocks. FPS decreases
+monotonically as the active payload increases, with a similar trend observed
+for every block.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[
+        width=0.88\textwidth
+    ]{/root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_fps_vs_active_gaussians.pdf}
+    \caption{
+        Median rendering speed as a function of active Gaussian count across
+        five pretrained blocks. Each point represents the mean of the median
+        FPS values obtained from five repeated runs, where each run contains
+        300 measured frames following 20 warm-up frames. Error bars on the
+        individual block curves indicate variation across timing repetitions,
+        while the aggregate curve shows variation across blocks.
+    }
+    \label{fig:rq1_fps_gaussians}
+\end{figure}
+\subsubsection{Payload--Performance Relationship}
+
+Figure~\ref{fig:rq1_time_gaussians} presents the same experiment in terms of
+rendering time. Unlike FPS, frame time exhibits an approximately linear
+relationship with active Gaussian count, making this representation more
+appropriate for analysing computational scalability.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[
+        width=0.88\textwidth
+    ]{/root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_render_time_vs_active_gaussians.pdf}
+    \caption{
+        Median rendering time as a function of active Gaussian count for five
+        pretrained blocks. Individual curves show block-specific results, and
+        the thicker aggregate curve shows the cross-block mean. The dashed
+        line represents the pooled linear fit. Rendering time increases
+        approximately linearly with the number of active Gaussians.
+    }
+    \label{fig:rq1_time_gaussians}
+\end{figure}
+
+
+Rendering time increased monotonically as the active Gaussian population
+increased. Across the five blocks, increasing the payload from $5{,}000$ to
+$50{,}000$ Gaussians increased the mean median frame time from approximately
+
+\begin{equation}
+3.03\text{ ms}
+\end{equation}
+
+to
+
+\begin{equation}
+29.55\text{ ms}.
+\end{equation}
+
+Over the same range, mean median rendering speed decreased from approximately
+
+\begin{equation}
+330.58\text{ FPS}
+\end{equation}
+
+to
+
+\begin{equation}
+33.87\text{ FPS}.
+\end{equation}
+
+Thus, increasing the active Gaussian population by a factor of ten produced
+an approximately tenfold increase in frame time.
+
+The inverse relationship between FPS and rendering time explains the
+nonlinear FPS curve:
+
+\begin{equation}
+\mathrm{FPS}
+=
+\frac{1000}{T_{\mathrm{render}}}.
+\end{equation}
+
+For example, increasing the Gaussian count from $5{,}000$ to $10{,}000$
+approximately doubled the aggregate frame time from 3.03~ms to 6.05~ms and
+approximately halved FPS from 330.58 to 165.58.
+
+\subsubsection{Block-Level Results}
+
+Table~\ref{tab:rq1_full_payload_blocks} reports the performance of each block
+at the full $50{,}000$-Gaussian payload.
+
+\begin{table}[H]
+\centering
+\caption{Block-level performance at the complete Gaussian payload.}
+\label{tab:rq1_full_payload_blocks}
+\begin{tabular}{lrrr}
+\toprule
+Block &
+Gaussian--Tile Pairs &
+Median Time (ms) &
+Median FPS \\
+\midrule
+\texttt{gaussians\_016} & 761,972 & 29.337 & 34.09 \\
+\texttt{gaussians\_017} & 736,767 & 28.111 & 35.57 \\
+\texttt{gaussians\_026} & 800,128 & 30.885 & 32.38 \\
+\texttt{gaussians\_027} & 773,308 & 29.854 & 33.50 \\
+\texttt{gaussians\_028} & 771,490 & 29.584 & 33.80 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Although all blocks contained the same number of Gaussians and the same raw
+payload size, their rendering times differed. At the full payload,
+\texttt{gaussians\_026} generated 800,128 Gaussian--tile pairs and rendered
+at approximately 32.38 FPS. In contrast, \texttt{gaussians\_017} generated
+736,767 pairs and rendered at approximately 35.57 FPS.
+
+This result shows that Gaussian count alone does not completely determine
+rendering cost. The projected spatial coverage of the Gaussians, represented
+by the Gaussian--tile pair count, also affects the amount of work performed by
+the rendering kernel.
+
+Although Gaussian count captures the dominant scalability trend, blocks with
+the same number of active Gaussians do not always require exactly the same
+rendering time. Figure~\ref{fig:rq1_time_pairs} therefore relates frame time
+to the number of Gaussian--tile pairs generated during preprocessing.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[
+        width=0.88\textwidth
+    ]{/root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_render_time_vs_tile_pairs.pdf}
+    \caption{
+        Relationship between Gaussian--tile pair count and median rendering
+        time across all blocks and payload levels. Each marker represents one
+        block at one payload ratio after aggregation across five timing
+        repetitions. The fitted regression line demonstrates that projected
+        tile coverage explains residual block-specific performance differences
+        not captured by Gaussian count alone.
+    }
+    \label{fig:rq1_time_pairs}
+\end{figure}
+
+
+Figure~\ref{fig:rq1_full_payload_blocks} compares the five blocks when all
+$50{,}000$ Gaussians are active.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[
+        width=0.82\textwidth
+    ]{/root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_full_payload_block_comparison.pdf}
+    \caption{
+        Full-payload median rendering time for the five pretrained blocks.
+        All blocks contain $50{,}000$ active Gaussians, but their rendering
+        costs differ because their Gaussian--tile pair counts and projected
+        spatial coverage are not identical.
+    }
+    \label{fig:rq1_full_payload_blocks}
+\end{figure}
+
+\subsubsection{Scalability Models}
+
+A separate linear model was fitted to each block:
+
+\begin{equation}
+T_{\mathrm{render}}^{(b)}
+=
+\beta_0^{(b)}
++
+\beta_1^{(b)}
+N_{\mathrm{active}}
++
+\epsilon.
+\end{equation}
+
+The resulting slopes are shown in
+Table~\ref{tab:rq1_block_regression}.
+
+\begin{table}[H]
+\centering
+\caption{Block-specific linear scalability models.}
+\label{tab:rq1_block_regression}
+\begin{tabular}{lrr}
+\toprule
+Block &
+Additional Time per 1,000 Gaussians (ms) &
+$R^2$ \\
+\midrule
+\texttt{gaussians\_016} & 0.584 & 0.99996 \\
+\texttt{gaussians\_017} & 0.560 & 0.99999 \\
+\texttt{gaussians\_026} & 0.614 & 0.99992 \\
+\texttt{gaussians\_027} & 0.594 & 0.99991 \\
+\texttt{gaussians\_028} & 0.591 & 0.99994 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All five blocks exhibited an almost perfectly linear relationship between
+active Gaussian count and rendering time, with block-specific $R^2$ values
+greater than 0.9999.
+
+Across the blocks, the rendering-time increase ranged from approximately
+
+\begin{equation}
+0.560\text{ ms}
+\end{equation}
+
+to
+
+\begin{equation}
+0.614\text{ ms}
+\end{equation}
+
+for every additional $1{,}000$ Gaussians.
+
+A pooled linear model with block-specific intercepts produced
+
+\begin{equation}
+T_{\mathrm{render}}
+\approx
+0.019
++
+5.8871 \times 10^{-4}
+N_{\mathrm{active}}
++
+\gamma_b,
+\end{equation}
+
+where \texttt{gaussians\_016} is the reference block and $\gamma_b$
+represents the block-specific intercept adjustment.
+
+The pooled model achieved
+
+\begin{equation}
+R^2 \approx 0.99905
+\end{equation}
+
+with an RMSE of approximately
+
+\begin{equation}
+0.253\text{ ms}.
+\end{equation}
+
+The fitted common slope corresponds to approximately
+
+\begin{equation}
+0.589\text{ ms}
+\end{equation}
+
+per additional $1{,}000$ active Gaussians.
+
+Figure~\ref{fig:rq1_normalised_scaling} compares the relative scaling
+behaviour of the five blocks after normalising each block by its own
+full-payload rendering time.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[
+        width=0.82\textwidth
+    ]{/root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_normalised_time_vs_retention.pdf}
+    \caption{
+        Render time normalised by the full-payload render time for each block.
+        The close alignment of the block curves indicates that the relative
+        payload-scaling behaviour is consistent across the five pretrained
+        representations. The dashed reference indicates ideal linear scaling
+        with retained Gaussian percentage.
+    }
+    \label{fig:rq1_normalised_scaling}
+\end{figure}
+
+\subsubsection{Qualitative Reconstruction Check}
+
+Figure~\ref{fig:rq1_qualitative_reconstructions} presents representative
+rendering outputs from the five pretrained blocks at selected Gaussian
+retention ratios. The figure is included as a qualitative sanity check to
+confirm that the timed configurations produce valid reconstructions
+throughout the payload sweep. A shared linear grayscale is used across
+all panels so that payload-dependent changes in the rendered response remain
+visible.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[
+        width=0.98\textwidth
+    ]{/root/project/scripts/render_scripts/RQ1/results/rq1_multiblock/figures/rq1_qualitative_reconstructions.pdf}
+    \caption{
+        Representative rendering outputs for the five pretrained blocks at
+        10\%, 50\%, and 100\% Gaussian retention. Each row corresponds to a
+        retained payload level and each column to one pretrained block. All
+        panels use the same linear grayscale MIP-response scale.
+    }
+    \label{fig:rq1_qualitative_reconstructions}
+\end{figure}
+
+\subsubsection{Cross-Block Variation}
+
+Variation between blocks increased moderately as the Gaussian payload
+increased. At the 10\% payload, the standard deviation of median FPS across
+blocks was approximately 11.66 FPS. At the complete payload, the corresponding
+standard deviation was approximately 1.15 FPS.
+
+The absolute FPS spread became smaller at high payloads because FPS is
+inversely related to frame time. However, block-specific differences remained
+visible in rendering time and Gaussian--tile pair count.
+
+The full-payload frame times ranged from approximately
+
+\begin{equation}
+28.11\text{ ms}
+\end{equation}
+
+to
+
+\begin{equation}
+30.89\text{ ms}.
+\end{equation}
+
+This corresponds to a difference of approximately 9.9\% between the fastest
+and slowest blocks despite identical Gaussian counts and payload sizes.
+
+Consequently, active Gaussian count is a strong first-order predictor of
+rendering cost, while projected tile coverage explains the residual
+block-to-block variation.
+
+\subsubsection{Repeatability}
+
+The five timing repetitions for most configurations exhibited very low
+variation. At the complete payload, the fifth-percentile FPS was nearly equal
+to the median FPS for every block. Across all five blocks, the mean median FPS
+was 33.87, while the mean fifth-percentile FPS was 33.86.
+
+This small difference indicates that steady-state rendering performance was
+temporally stable after the warm-up period.
+
+A limited number of early low-payload repetitions contained slightly slower
+frames, but these deviations did not affect the monotonic payload trend or
+the fitted scalability models.
+
+\subsubsection{Answer to RQ1}
+
+The multi-block results show that active Gaussian payload has a strong,
+monotonic, and approximately linear effect on steady-state rendering time on
+the fixed GPU.
+
+For every evaluated block,
+
+\begin{equation}
+T_{\mathrm{render}}
+\propto
+N_{\mathrm{active}}.
+\end{equation}
+
+Across the five blocks, each additional $1{,}000$ active Gaussians increased
+frame time by approximately 0.560--0.614~ms. As a consequence, FPS decreased
+reciprocally as the payload increased.
+
+The experiment also showed that blocks with equal Gaussian counts can have
+different rendering costs because their Gaussian--tile pair counts differ.
+Therefore, Gaussian count determines the dominant scalability trend, while
+the projected spatial coverage of the Gaussians explains the smaller
+block-specific deviations.
+
+The answer to RQ1 is therefore:
+
+\begin{quote}
+Across five pretrained blocks rendered on the same GPU under identical
+settings, steady-state rendering time increased approximately linearly with
+active Gaussian payload. The dominant scaling factor was the number of active
+Gaussians, while Gaussian--tile pair count accounted for residual performance
+differences between blocks. Consequently, FPS decreased approximately
+reciprocally as the active payload increased.
+\end{quote}
+
+
+\end{document}

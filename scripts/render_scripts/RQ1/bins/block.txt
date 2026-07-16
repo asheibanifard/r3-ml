@@ -1,0 +1,5 @@
+/root/project/scripts/render_scripts/RQ1/bins/gaussians_016.bin
+/root/project/scripts/render_scripts/RQ1/bins/gaussians_017.bin
+/root/project/scripts/render_scripts/RQ1/bins/gaussians_026.bin
+/root/project/scripts/render_scripts/RQ1/bins/gaussians_027.bin
+/root/project/scripts/render_scripts/RQ1/bins/gaussians_028.bin

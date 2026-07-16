@@ -1,0 +1,66 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v4 (rebalanced densification)
+#
+# Tests whether growth (clone/split) and pruning can be rebalanced so that the
+# Gaussian population self-limits at a per-block, content-dependent equilibrium
+# rather than racing to whatever max_gaussians ceiling is set. Motivated by
+# hard evidence from v2/v3 (identical log.json n_gauss trajectories across
+# very different blocks, doubling every ~4 epochs and hitting the ceiling by
+# ~6-7% of the training budget, then perfectly flat for the rest): with
+# default densify_grad_thresh/prune_inten_thresh, growth is completely
+# unopposed by pruning, at every ceiling tested (5k/20k/50k).
+#
+# Changes from v2/v3, and the reasoning behind each:
+#   - max_gaussians raised to 150,000: a safety ceiling only, well above
+#     anything observed so far, so it should not be the limiting factor if
+#     rebalancing works. This is NOT the mechanism intended to control
+#     population size in this config -- densify_grad_thresh/prune_inten_thresh
+#     below are.
+#   - densify_grad_thresh raised 2e-4 -> 1e-3 (5x stricter): far fewer
+#     Gaussians should qualify for clone/split at each check, slowing the
+#     near-doubling-every-event growth seen in v2/v3.
+#   - prune_inten_thresh raised 1e-3 -> 5e-3 (5x more aggressive): more
+#     low-intensity, low-marginal-utility Gaussians should actually be removed
+#     at each check, giving pruning real weight against growth instead of a
+#     negligible one.
+#   - epochs raised 500 -> 5000 (10x) so growth and pruning have far more time
+#     to compete before any cutoff, and so a genuine bell-curve (rise, peak,
+#     decline, plateau) in n_gauss-over-epoch has room to appear if it exists.
+#   - densify_until_step raised proportionally to epoch 4000 of 5000 (steps
+#     200000/250000), keeping the same ~20% frozen-population stabilisation
+#     window at the end that v2/v3 used (their 400-500 of 500 epochs).
+#
+# These specific threshold values are a FIRST ATTEMPT, not tuned -- they are
+# deliberately validated on a small test subset of blocks (see
+# scripts/train_pilot_blocks_v4_test.sh) before any commitment to a full
+# 64-block run, given the substantial per-block time cost this config implies.
+#
+# Usage:
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v4.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v4_test/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1/v2/v3
+max_gaussians: 150000     # safety ceiling only -- see reasoning above
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          5000     # v1 was 200, v2/v3 were 500 -- 10x v2/v3
+steps_per_epoch: 50       # unchanged -- so total steps = 250000
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:   500     # epoch 10   (unchanged from v2/v3)
+densify_until_step:  200000  # epoch 4000 (20% frozen stabilisation window, same proportion as v2/v3)
+densify_grad_thresh: 0.001   # 5x stricter than the 2e-4 default -- slows growth qualification
+prune_inten_thresh:  0.005   # 5x more aggressive than the 1e-3 default -- gives pruning real weight
+
+# All other hyperparameters (LR schedule, densify_interval, densify_max_scale,
+# loss weights) are left at scripts/_3dgs/_3dgs.py's argparse defaults.

@@ -1,0 +1,86 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v11 (minimal-Gaussian-count)
+#
+# Goal shift: v2-v10 all treated this as a STABILITY problem -- tune
+# densify/prune cadence until N stops racing to the ceiling. v10 confirmed
+# that with densify_grad_thresh/densify_max_scale actually at their argparse
+# defaults (2e-4 / 0.04 -- v10's explicit values had a 10x typo, 0.002/0.1,
+# that accidentally killed all growth in the short smoke test; fixing the
+# typo reproduced runaway growth again: N went 1000 -> 343,340 in 13 growth
+# events / 1300 steps, with PSNR falling as N grew).
+#
+# The actual objective is not "stable" -- it's MINIMAL N. That reframes the
+# fix entirely. This project's loss function (see _loss_term_count,
+# _loss_term_L1_intensity, _loss_term_coverage, _loss_term_aniso in
+# scripts/_3dgs/_3dgs.py) already has four regularisers purpose-built to
+# reduce the number of Gaussians needed for a given fidelity:
+#   - lambda_aniso    : collapses short axes -> cigars covering more per Gaussian
+#   - lambda_count    : soft-L0 penalty, pulls borderline Gaussians to extinction
+#   - lambda_L1       : steady pull toward v_k=0, finishes off zombies count-term leaves
+#   - lambda_coverage : rewards larger s_max -> fewer, bigger Gaussians
+# Every prior config (v9, v10, and even the "tuned" configs/train_single_block.yml)
+# leaves lambda_count / lambda_L1 / lambda_coverage at their 0.0 argparse
+# default -- i.e. the count-minimizing machinery has never actually been
+# exercised. v9-v10 fought runaway growth purely via prune cadence/threshold,
+# never via the loss terms designed for exactly this.
+#
+# v11 changes, relative to v10:
+#   - densify_grad_thresh / densify_max_scale: corrected to the true argparse
+#     defaults (2e-4 / 0.04) -- v10's explicit values (0.002 / 0.1) were a typo.
+#   - max_gaussians: 5000, a REAL ceiling (not a 1.5M safety-valve confound).
+#     5000 matches the project's own documented target capacity (see
+#     scripts/train_scripts/train_all_blocks.py launch command in CLAUDE.md,
+#     --max_gauss 5000) -- if the goal is minimal N, the ceiling should BE
+#     the target, not an oversized wall we hope growth stops short of.
+#   - lambda_aniso / lambda_count / lambda_L1 / lambda_coverage: briefly
+#     turned on for the initial sweep, then reverted back to v2's approach
+#     (argparse defaults, i.e. off) once the sweep showed max_gaussians was
+#     the only thing actually constraining N -- see the Loss section below.
+#
+# Usage (2-block test, same b_000/b_133 as v2-v10):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v11.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v11_test/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1-v10
+max_gaussians: 5000       # REAL ceiling now -- matches project's documented target N
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # matches v2-v10 for a comparable trajectory
+steps_per_epoch: 50
+
+# ── Densification: same cadence as v10, but with CORRECTED gates ──────────────
+densify_from_step:   500     # epoch 10   (unchanged from v2-v10)
+densify_until_step:  20000   # epoch 400  (unchanged from v2-v10)
+densify_interval:    100     # 2 epochs  -- split_and_clone() cadence
+prune_interval:      500     # 10 epochs -- prune_only() cadence
+prune_inten_thresh:  0.01    # 10x default (1e-3) -- aggressive enough to work
+                              # WITH the new sparsity losses, not as extreme as
+                              # v10's 0.05 (which was tuned to fight runaway growth
+                              # alone; here the loss terms share that job)
+densify_grad_thresh: 0.0002  # CORRECTED -- v10 had 0.002 (10x too high) by typo
+densify_max_scale:   0.04    # CORRECTED -- v10 had 0.1 by typo
+
+# ── Loss: reverted to v2's approach -- no explicit overrides, argparse defaults ──
+# config_v2.yml (the higher-budget retrain that first introduced the
+# max_gaussians/densify-window pattern this file builds on) never touched
+# the loss section at all: only_mse_overlap defaults to False, lambda_ssim
+# to 0.2, lambda_aniso/count/L1/coverage to 0.0, lambda_scale/sparsity/
+# scale_ceiling/scale_outlier to their small nonzero defaults (1e-4/1e-3/
+# 1e-3/5e-4). Pulled the v8-v10 SSIM-ratio override and the four
+# count-minimizing terms back out here to isolate the effect of the
+# max_gaussians ceiling / corrected densify gates (validated by the sweep)
+# from any effect of the loss changes -- those weren't doing much work
+# anyway (see sweep notes: N always saturated the ceiling regardless).
+
+# All other hyperparameters (LR schedule, split_scale_divisor, etc.) are left
+# at scripts/_3dgs/_3dgs.py's argparse defaults.

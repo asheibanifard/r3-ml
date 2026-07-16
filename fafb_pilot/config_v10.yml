@@ -1,0 +1,73 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v10 (high-ceiling equilibrium probe)
+#
+# v9 (aggressive prune-only: prune_inten_thresh 10x default = 0.01, prune every
+# 50 STEPS = every 1 epoch, growth left at densify_interval=200 steps = every
+# 4 epochs) still showed clone/split massively outpacing prune at every
+# interval in the smoke test (by step 1400/epoch 28: N=23,636, pruned counts
+# only ~150-250 per interval) -- pruning far more often at the intensity
+# threshold alone wasn't enough while growth still fires every 4 epochs.
+#
+# First v10 pass (densify every 200 epochs / prune every 50 epochs) confirmed
+# growth *frequency* is the dominant lever -- N settled at ~2,650 instead of
+# racing to the ceiling -- but at only 2 growth events total it starved the
+# model (best vol_PSNR ~17.2 dB vs 26-29 dB for every ceiling-hitting version).
+#
+# This pass tunes toward a middle ground and, critically, removes the
+# artificial 150,000 safety ceiling as a confound: max_gaussians raised 10x to
+# 1,500,000 so any equilibrium reached below that is a genuine clone/prune
+# balance point, not a wall. Current values (hand-tuned in this file):
+#   - densify_interval:   100  steps ( 2 epochs) -- growth checked far more
+#     often than the first v10 pass (was 10000 steps / 200 epochs)
+#   - prune_interval:     500  steps (10 epochs) -- pruning still checked
+#     much less often than growth, but far more often than the first v10
+#     pass's 2500 steps / 50 epochs
+#   - prune_inten_thresh: 0.05        -- 50x the 1e-3 default, 5x v9's 0.01
+#   - max_gaussians:      1,500,000   -- safety ceiling only, 10x v4-v9's
+#     150,000, specifically to observe whether N stabilises on its own
+#
+# densify_grad_thresh / densify_max_scale were previously left at argparse
+# defaults implicitly -- now made explicit below since they're the actual
+# growth-eligibility gates (see split_and_clone() in scripts/_3dgs/_3dgs.py):
+#   high_g = avg_grad > densify_grad_thresh   -> "needs more capacity"
+#   small  = curr_scale < densify_max_scale   -> clone (else split)
+# Values are still the argparse defaults (2e-4 / 0.04) -- unchanged from
+# every prior version (v2-v9), spelled out here rather than left implicit.
+#
+# Usage (see fafb_pilot/scripts/train_pilot_blocks_v10_test.sh for the 2-block
+# test driver, same b_000 / b_133 blocks as v2-v9):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v10.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v10_test/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1-v9
+max_gaussians: 1500000    # 10x v4-v9's 150,000 -- removes the ceiling as a confound
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # matches v2-v9 for a comparable trajectory
+steps_per_epoch: 50
+
+# ── Densification: frequent growth, less-frequent-but-aggressive pruning ──────
+densify_from_step:   500     # epoch 10   (unchanged from v2-v9)
+densify_until_step:  20000   # epoch 400  (unchanged from v2-v9)
+densify_interval:    100     # 2 epochs  -- split_and_clone() cadence
+prune_interval:      500     # 10 epochs -- prune_only() cadence
+prune_inten_thresh:  0.05    # 50x default (1e-3), 5x v9's 0.01
+densify_grad_thresh: 0.0002 # argparse default (2e-4), now explicit -- growth gate
+densify_max_scale:   0.04   # argparse default, now explicit -- clone-vs-split gate
+
+# ── Loss: UltraGauss/MRI-paper shape, L1:SSIM = 0.7:0.3 ratio (unchanged from v8/v9) ──
+only_mse_overlap: true
+lambda_ssim:      0.428571   # 0.3/0.7 -- see v8 loss-ratio note
+
+# All other hyperparameters (LR schedule, split_scale_divisor, etc.) are left
+# at scripts/_3dgs/_3dgs.py's argparse defaults.

@@ -2,107 +2,41 @@
 \providecommand\hyper@newdestlabel[2]{}
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
-\@writefile{toc}{\contentsline {section}{\numberline {1}Experimental Objectives}{2}{section.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {2}System Definition}{2}{section.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Gaussian Representation}{2}{subsection.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Moving Render Cube}{3}{subsection.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Camera Motion}{3}{subsection.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Evaluation Metrics}{3}{section.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Rendering Performance}{3}{subsection.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Payload Metrics}{4}{subsection.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Candidate Pressure}{4}{subsection.3.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Transition Latency}{4}{subsection.3.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}Milestone 1: Correctness and Instrumentation}{5}{section.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Objective}{5}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}M1.1: Single-Block Equivalence}{5}{subsection.4.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Single-block equivalence results.}}{5}{table.caption.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {1}Experimental Objectives}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}RQ1: Scalability of Active Gaussian Payload Across Multiple Blocks}{1}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.1}Research Question}{1}{subsubsection.1.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.2}Objective}{1}{subsubsection.1.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.3}Experimental Setup}{1}{subsubsection.1.1.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Fixed rendering settings for the multi-block RQ1 experiment.}}{2}{table.caption.1}\protected@file@percent }
 \providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{tab:single_block_equivalence}{{1}{5}{Single-block equivalence results}{table.caption.1}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Single-block equivalence between the original renderer and the moving-cube renderer.}}{6}{figure.caption.2}\protected@file@percent }
-\newlabel{fig:single_block_equivalence}{{1}{6}{Single-block equivalence between the original renderer and the moving-cube renderer}{figure.caption.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}M1.2: Two-Block Boundary Correctness}{6}{subsection.4.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Two-block boundary correctness.}}{6}{table.caption.3}\protected@file@percent }
-\newlabel{tab:two_block_correctness}{{2}{6}{Two-block boundary correctness}{table.caption.3}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Qualitative continuity across the shared boundary of two independently pretrained blocks.}}{7}{figure.caption.4}\protected@file@percent }
-\newlabel{fig:two_block_transition}{{2}{7}{Qualitative continuity across the shared boundary of two independently pretrained blocks}{figure.caption.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}M1.3: Timing Validation}{7}{subsection.4.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Timing instrumentation validation.}}{7}{table.caption.5}\protected@file@percent }
-\newlabel{tab:timing_validation}{{3}{7}{Timing instrumentation validation}{table.caption.5}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {5}Milestone 2: Active Payload Versus FPS}{7}{section.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Objective}{7}{subsection.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Controlled Payload Sweep}{7}{subsection.5.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Baseline controlled payload configuration.}}{8}{table.caption.6}\protected@file@percent }
-\newlabel{tab:payload_baseline}{{4}{8}{Baseline controlled payload configuration}{table.caption.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Recorded Variables}{8}{subsection.5.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Active payload scaling results.}}{8}{table.caption.7}\protected@file@percent }
-\newlabel{tab:payload_scaling}{{5}{8}{Active payload scaling results}{table.caption.7}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Rendering frame rate as a function of active Gaussian count.}}{9}{figure.caption.8}\protected@file@percent }
-\newlabel{fig:fps_vs_active_count}{{3}{9}{Rendering frame rate as a function of active Gaussian count}{figure.caption.8}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Rendering frame rate as a function of active Gaussian payload normalised by GPU memory.}}{9}{figure.caption.9}\protected@file@percent }
-\newlabel{fig:fps_vs_active_ratio}{{4}{9}{Rendering frame rate as a function of active Gaussian payload normalised by GPU memory}{figure.caption.9}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Render time as a function of active Gaussian payload.}}{9}{figure.caption.10}\protected@file@percent }
-\newlabel{fig:time_vs_payload}{{5}{9}{Render time as a function of active Gaussian payload}{figure.caption.10}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Rendering frame rate as a function of average Gaussian--tile candidate pressure.}}{9}{figure.caption.11}\protected@file@percent }
-\newlabel{fig:fps_vs_candidate_pressure}{{6}{9}{Rendering frame rate as a function of average Gaussian--tile candidate pressure}{figure.caption.11}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Regression Analysis}{10}{subsection.5.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Regression models for predicting render time.}}{10}{table.caption.12}\protected@file@percent }
-\newlabel{tab:regression_models}{{6}{10}{Regression models for predicting render time}{table.caption.12}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Milestone 2 Outcome}{10}{subsection.5.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Milestone 3: Multi-Block Overlap Scaling}{10}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Objective}{10}{subsection.6.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Multi-block overlap configurations.}}{11}{table.caption.13}\protected@file@percent }
-\newlabel{tab:overlap_configurations}{{7}{11}{Multi-block overlap configurations}{table.caption.13}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Frame rate for one-, two-, four-, and eight-block overlap configurations.}}{11}{figure.caption.14}\protected@file@percent }
-\newlabel{fig:fps_vs_blocks}{{7}{11}{Frame rate for one-, two-, four-, and eight-block overlap configurations}{figure.caption.14}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Loaded and active Gaussian populations for different spatial overlap patterns.}}{11}{figure.caption.15}\protected@file@percent }
-\newlabel{fig:loaded_vs_active}{{8}{11}{Loaded and active Gaussian populations for different spatial overlap patterns}{figure.caption.15}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Qualitative rendering examples for different overlap configurations.}}{11}{figure.caption.16}\protected@file@percent }
-\newlabel{fig:overlap_qualitative}{{9}{11}{Qualitative rendering examples for different overlap configurations}{figure.caption.16}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Residual Overlap Penalty}{11}{subsection.6.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Measured and predicted render time for overlap configurations.}}{12}{table.caption.17}\protected@file@percent }
-\newlabel{tab:overlap_residuals}{{8}{12}{Measured and predicted render time for overlap configurations}{table.caption.17}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {7}Milestone 4: New-Area Loading and Transition Latency}{12}{section.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Objective}{12}{subsection.7.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Translation Paths}{12}{subsection.7.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Transition paths.}}{12}{table.caption.18}\protected@file@percent }
-\newlabel{tab:transition_paths}{{9}{12}{Transition paths}{table.caption.18}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Latency Decomposition}{12}{subsection.7.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces New-area transition latency decomposition.}}{13}{table.caption.19}\protected@file@percent }
-\newlabel{tab:transition_breakdown}{{10}{13}{New-area transition latency decomposition}{table.caption.19}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces New-area loading latency as a function of newly loaded block payload.}}{13}{figure.caption.20}\protected@file@percent }
-\newlabel{fig:transition_latency}{{10}{13}{New-area loading latency as a function of newly loaded block payload}{figure.caption.20}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Breakdown of transition latency into loading, transformation, transfer, preprocessing, and rendering components.}}{13}{figure.caption.21}\protected@file@percent }
-\newlabel{fig:transition_breakdown}{{11}{13}{Breakdown of transition latency into loading, transformation, transfer, preprocessing, and rendering components}{figure.caption.21}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Camera trajectory and locations where the active block set changes.}}{14}{figure.caption.22}\protected@file@percent }
-\newlabel{fig:camera_path}{{12}{14}{Camera trajectory and locations where the active block set changes}{figure.caption.22}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Milestone 4 Outcome}{14}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}Milestone 5: Cross-Hardware Deployment}{14}{section.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Objective}{14}{subsection.8.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Hardware Configuration}{14}{subsection.8.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces Hardware environments.}}{15}{table.caption.23}\protected@file@percent }
-\newlabel{tab:hardware}{{11}{15}{Hardware environments}{table.caption.23}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Reduced Cross-Hardware Matrix}{15}{subsection.8.3}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {13}{\ignorespaces Cross-hardware frame rate as a function of active payload ratio.}}{15}{figure.caption.24}\protected@file@percent }
-\newlabel{fig:cross_hardware_payload}{{13}{15}{Cross-hardware frame rate as a function of active payload ratio}{figure.caption.24}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {14}{\ignorespaces Cross-hardware frame rate as a function of total measured renderer-memory ratio.}}{15}{figure.caption.25}\protected@file@percent }
-\newlabel{fig:cross_hardware_renderer_memory}{{14}{15}{Cross-hardware frame rate as a function of total measured renderer-memory ratio}{figure.caption.25}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {15}{\ignorespaces Real-time feasibility envelope. Points are marked as pass or fail according to the 30 FPS criterion.}}{16}{figure.caption.26}\protected@file@percent }
-\newlabel{fig:feasibility_envelope}{{15}{16}{Real-time feasibility envelope. Points are marked as pass or fail according to the 30 FPS criterion}{figure.caption.26}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Deployment Rule}{16}{subsection.8.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {12}{\ignorespaces Recommended deployment operating points.}}{16}{table.caption.27}\protected@file@percent }
-\newlabel{tab:deployment}{{12}{16}{Recommended deployment operating points}{table.caption.27}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {9}Milestone 6: Ablation Studies}{16}{section.9}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {13}{\ignorespaces Ablation study results.}}{16}{table.caption.28}\protected@file@percent }
-\newlabel{tab:ablations}{{13}{16}{Ablation study results}{table.caption.28}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {10}Experimental Protocol}{17}{section.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {11}Expected Analysis Structure}{17}{section.11}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {12}Threats to Validity}{17}{section.12}\protected@file@percent }
-\gdef \LT@i {\LT@entry 
-    {1}{66.35393pt}\LT@entry 
-    {1}{202.24568pt}\LT@entry 
-    {1}{184.13pt}}
-\@writefile{toc}{\contentsline {section}{\numberline {13}Summary of Milestone Deliverables}{18}{section.13}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {14}Current Completion Status}{18}{section.14}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {15}{\ignorespaces Current implementation status.}}{18}{table.caption.29}\protected@file@percent }
-\newlabel{tab:status}{{15}{18}{Current implementation status}{table.caption.29}{}}
-\gdef \@abspage@last{18}
+\newlabel{tab:rq1_multiblock_settings}{{1}{2}{Fixed rendering settings for the multi-block RQ1 experiment}{table.caption.1}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.4}Payload Construction}{2}{subsubsection.1.1.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.5}Timing Protocol}{2}{subsubsection.1.1.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.6}Aggregate Results}{3}{subsubsection.1.1.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Aggregate RQ1 results across five pretrained Gaussian blocks.}}{3}{table.caption.2}\protected@file@percent }
+\newlabel{tab:rq1_multiblock_results}{{2}{3}{Aggregate RQ1 results across five pretrained Gaussian blocks}{table.caption.2}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.7}Rendering Performance}{4}{subsubsection.1.1.7}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces  Median rendering speed as a function of active Gaussian count across five pretrained blocks. Each point represents the mean of the median FPS values obtained from five repeated runs, where each run contains 300 measured frames following 20 warm-up frames. Error bars on the individual block curves indicate variation across timing repetitions, while the aggregate curve shows variation across blocks. }}{4}{figure.caption.3}\protected@file@percent }
+\newlabel{fig:rq1_fps_gaussians}{{1}{4}{Median rendering speed as a function of active Gaussian count across five pretrained blocks. Each point represents the mean of the median FPS values obtained from five repeated runs, where each run contains 300 measured frames following 20 warm-up frames. Error bars on the individual block curves indicate variation across timing repetitions, while the aggregate curve shows variation across blocks}{figure.caption.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.8}Payload--Performance Relationship}{4}{subsubsection.1.1.8}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces  Median rendering time as a function of active Gaussian count for five pretrained blocks. Individual curves show block-specific results, and the thicker aggregate curve shows the cross-block mean. The dashed line represents the pooled linear fit. Rendering time increases approximately linearly with the number of active Gaussians. }}{5}{figure.caption.4}\protected@file@percent }
+\newlabel{fig:rq1_time_gaussians}{{2}{5}{Median rendering time as a function of active Gaussian count for five pretrained blocks. Individual curves show block-specific results, and the thicker aggregate curve shows the cross-block mean. The dashed line represents the pooled linear fit. Rendering time increases approximately linearly with the number of active Gaussians}{figure.caption.4}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.9}Block-Level Results}{6}{subsubsection.1.1.9}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Block-level performance at the complete Gaussian payload.}}{6}{table.caption.5}\protected@file@percent }
+\newlabel{tab:rq1_full_payload_blocks}{{3}{6}{Block-level performance at the complete Gaussian payload}{table.caption.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces  Relationship between Gaussian--tile pair count and median rendering time across all blocks and payload levels. Each marker represents one block at one payload ratio after aggregation across five timing repetitions. The fitted regression line demonstrates that projected tile coverage explains residual block-specific performance differences not captured by Gaussian count alone. }}{6}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:rq1_time_pairs}{{3}{6}{Relationship between Gaussian--tile pair count and median rendering time across all blocks and payload levels. Each marker represents one block at one payload ratio after aggregation across five timing repetitions. The fitted regression line demonstrates that projected tile coverage explains residual block-specific performance differences not captured by Gaussian count alone}{figure.caption.6}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces  Full-payload median rendering time for the five pretrained blocks. All blocks contain $50{,}000$ active Gaussians, but their rendering costs differ because their Gaussian--tile pair counts and projected spatial coverage are not identical. }}{7}{figure.caption.7}\protected@file@percent }
+\newlabel{fig:rq1_full_payload_blocks}{{4}{7}{Full-payload median rendering time for the five pretrained blocks. All blocks contain $50{,}000$ active Gaussians, but their rendering costs differ because their Gaussian--tile pair counts and projected spatial coverage are not identical}{figure.caption.7}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.10}Scalability Models}{7}{subsubsection.1.1.10}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Block-specific linear scalability models.}}{7}{table.caption.8}\protected@file@percent }
+\newlabel{tab:rq1_block_regression}{{4}{7}{Block-specific linear scalability models}{table.caption.8}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces  Render time normalised by the full-payload render time for each block. The close alignment of the block curves indicates that the relative payload-scaling behaviour is consistent across the five pretrained representations. The dashed reference indicates ideal linear scaling with retained Gaussian percentage. }}{8}{figure.caption.9}\protected@file@percent }
+\newlabel{fig:rq1_normalised_scaling}{{5}{8}{Render time normalised by the full-payload render time for each block. The close alignment of the block curves indicates that the relative payload-scaling behaviour is consistent across the five pretrained representations. The dashed reference indicates ideal linear scaling with retained Gaussian percentage}{figure.caption.9}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.11}Qualitative Reconstruction Check}{8}{subsubsection.1.1.11}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces  Ground-truth MIPs, retained-payload reconstructions, and pixelwise absolute differences for five pretrained blocks at 10\%, 50\%, and 100\% Gaussian retention. Each row represents one block. GT and reconstruction panels share the response scale, while all difference panels share the separate error scale. }}{9}{figure.caption.10}\protected@file@percent }
+\newlabel{fig:rq1_qualitative_reconstructions}{{6}{9}{Ground-truth MIPs, retained-payload reconstructions, and pixelwise absolute differences for five pretrained blocks at 10\%, 50\%, and 100\% Gaussian retention. Each row represents one block. GT and reconstruction panels share the response scale, while all difference panels share the separate error scale}{figure.caption.10}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.12}Cross-Block Variation}{9}{subsubsection.1.1.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.13}Repeatability}{9}{subsubsection.1.1.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.1.14}Answer to RQ1}{10}{subsubsection.1.1.14}\protected@file@percent }
+\gdef \@abspage@last{10}

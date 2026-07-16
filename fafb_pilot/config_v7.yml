@@ -1,0 +1,67 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v7 (pure-MSE control)
+#
+# v4 (5x threshold rebalance), v5 (MSE+overlap regularizer, isolated), and v6
+# (opacity+gradient significance pruning, inspired by Ali et al. 2025's 3DGS
+# compression survey) all FAILED to prevent runaway growth in the same way:
+# N hits the 150,000 safety ceiling within ~50-65/500 epochs regardless of
+# mechanism. Both the overlap regularizer and the significance-pruning method
+# have been discarded/reverted from scripts/_3dgs/_3dgs.py (see git history) --
+# they added complexity without changing the underlying outcome.
+#
+# v7 strips the loss back to the simplest possible baseline: total loss =
+# MSE ONLY (only_mse_overlap: true with lambda_overlap left at its default of
+# 0.0 collapses the existing isolation flag to pure MSE, with no need for any
+# further code changes).
+#
+# v7 ALSO decouples growth from pruning (previously always coupled in
+# densify_and_prune(), which is the mechanical source of the "pruned==cloned,
+# split==0" artifact seen once N pins at max_gaussians -- budget = max_n -
+# survivors_after_prune, so once N==max_gaussians, budget IS n_pruned, and
+# clone consumes it entirely before split ever gets a chance).
+# scripts/_3dgs/_3dgs.py now has split_and_clone() (growth only) and
+# prune_only() (pruning only) as independently-scheduled calls:
+#   - split_and_clone() every densify_interval steps  (100 here)
+#   - prune_only()      every prune_interval steps     (200 here)
+# A recently-cloned/split Gaussian gets a full 200-step window to acquire
+# opacity before prune_only() judges it on intensity, instead of being
+# evaluated by the very next densify call as under the old coupled behavior.
+#
+# Usage (see scripts/train_pilot_blocks_v7_test.sh for the 2-block test driver):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v7.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v7_test/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1-v6
+max_gaussians: 150000     # safety ceiling only, same as v4-v6
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # matches v2/v3/v4-test/v5-test/v6-test for a comparable trajectory
+steps_per_epoch: 50
+
+# ── Densification (growth) / pruning -- now decoupled cadences ────────────────
+densify_from_step:   500     # epoch 10   (unchanged from v2-v6)
+densify_until_step:  20000   # epoch 400  (unchanged from v2-v6)
+densify_interval:    100     # split_and_clone() cadence (was 200, shared with prune, in v2-v6)
+prune_interval:       200     # prune_only() cadence -- independent of growth cadence
+# densify_grad_thresh / prune_inten_thresh: argparse defaults (2e-4 / 1e-3).
+
+# ── Loss: MSE only ──────────────────────────────────────────────────────────────
+# only_mse_overlap strips the fused 8-term regularisation kernel (scale_reg,
+# scale_ceiling, scale_outlier, sparsity, anisotropy, count, L1_intensity,
+# coverage) and the gradient term. lambda_overlap is left unset (defaults to
+# 0.0), so with only_mse_overlap active the total loss reduces to MSE alone.
+only_mse_overlap: true
+lambda_ssim:      0.0
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale)
+# are left at scripts/_3dgs/_3dgs.py's argparse defaults.

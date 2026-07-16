@@ -1,0 +1,68 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v8 (UltraGauss/MRI-paper loss)
+#
+# v4-v7 all confirmed the same runaway-growth failure independent of loss shape
+# (rebalanced thresholds, overlap regularizer, significance pruning, pure MSE)
+# and independent of densify/prune coupling (v7 decoupled split_and_clone() /
+# prune_only() onto separate 100/200-step cadences). N still hit the 150,000
+# ceiling by ~step 1200-1300 (epoch 24-26) in the v7 run on b_000/b_133.
+#
+# v8 tests a different hypothesis: swap in the exact loss shape from Park,
+# Eid et al. "Rendering Novel Views of MRI Using 3D Gaussian Splatting"
+# (research/related_works/2606.26236v1.pdf, Sec 3.2): L = 0.7*L1 + 0.3*(1-SSIM),
+# no other regularisers, combined with the codebase's *standard* (pre-v7,
+# coupled) densification cadence rather than v7's decoupled split/prune.
+#
+# Loss-ratio note: _loss_term_mse() computes l1 + lambda_ssim*(1-SSIM), i.e.
+# L1 is implicitly weighted 1.0, not 0.7. Scaling the whole loss by a constant
+# (0.7) doesn't change the gradient *direction*, only its magnitude (~an
+# effective LR change), so setting lambda_ssim = 0.3/0.7 = 3/7 ~= 0.42857
+# reproduces the paper's 0.7:0.3 L1:SSIM *ratio* exactly. only_mse_overlap:
+# true strips the 8-term regulariser kernel and the gradient term, leaving
+# exactly l1 + 0.42857*(1-SSIM) -- proportional to the paper's loss.
+#
+# "Standard" densification: densify_interval left at the argparse default
+# (200) and prune_interval is NOT set, so it defaults to densify_interval
+# (see _3dgs_training.py:311) -- i.e. split_and_clone() and prune_only() run
+# on the same 200-step cadence, matching the pre-v7 (v2-v6) behavior instead
+# of v7's decoupled 100/200 split. densify_grad_thresh / prune_inten_thresh /
+# densify_max_scale are also left at argparse defaults (2e-4 / 1e-3 / 0.04),
+# same as v2-v3 before v4's threshold rebalance.
+#
+# Usage (see fafb_pilot/scripts/train_pilot_blocks_v8_test.sh for the 2-block
+# test driver, same b_000 / b_133 blocks as v2-v7):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v8.yml \
+#     --volume data/fafb/blocks/image_z30_y30_x30.tif \
+#     --out    fafb_pilot/models/blocks_v8_test/b_000
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v1-v7
+max_gaussians: 150000     # safety ceiling only, same as v4-v7
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # matches v2-v7 for a comparable trajectory
+steps_per_epoch: 50
+
+# ── Densification: standard (coupled) cadence, defaults left untouched ───────
+densify_from_step:   500     # epoch 10   (unchanged from v2-v7)
+densify_until_step:  20000   # epoch 400  (unchanged from v2-v7)
+densify_interval:    200     # argparse default -- split_and_clone() cadence
+# prune_interval intentionally NOT set -> defaults to densify_interval (200),
+# i.e. coupled growth/prune cadence, matching v2-v6 (pre-v7 decoupling).
+# densify_grad_thresh / prune_inten_thresh / densify_max_scale: argparse
+# defaults (2e-4 / 1e-3 / 0.04), unchanged from v2-v3.
+
+# ── Loss: UltraGauss/MRI-paper shape, L1:SSIM = 0.7:0.3 ratio ──────────────────
+only_mse_overlap: true
+lambda_ssim:      0.428571   # 0.3/0.7 -- see loss-ratio note above
+
+# All other hyperparameters (LR schedule, split_scale_divisor, etc.) are left
+# at scripts/_3dgs/_3dgs.py's argparse defaults.

@@ -77,6 +77,9 @@ steps.png
 download.log
 nohup.out
 
+# Paper draft (not tracked -- work in progress, changes too frequently)
+fafb_pilot/draft/
+
 # Compiled CUDA test/benchmark binaries (built by run_gaussian_mip.sh)
 scripts/render_scripts/gaussian_mip_realtime
 

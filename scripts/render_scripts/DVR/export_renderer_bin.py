@@ -5,7 +5,7 @@ Unified binary exporter for the adaptive CUDA inside-camera renderer.
 Supported modes
 ---------------
 1. dense_voxel
-   Input: .npy, .h5, or .hdf5 dense voxel block
+   Input: .npy, .h5, .hdf5, .tif, or .tiff dense voxel block
    Output magic: VOXL (0x564F584C)
 
 2. pretrained_gaussian
@@ -78,9 +78,18 @@ def load_dense_volume(path: Path, dataset: str) -> np.ndarray:
                     f"Available datasets: {list(file.keys())}"
                 )
             volume = file[dataset][...]
+    elif suffix in {".tif", ".tiff"}:
+        try:
+            import tifffile
+        except ImportError as error:
+            raise RuntimeError(
+                "tifffile is required for TIFF input: pip install tifffile"
+            ) from error
+
+        volume = tifffile.imread(path)
     else:
         raise ValueError(
-            "Dense voxel input must be .npy, .h5, or .hdf5."
+            "Dense voxel input must be .npy, .h5, .hdf5, .tif, or .tiff."
         )
 
     volume = np.asarray(volume)

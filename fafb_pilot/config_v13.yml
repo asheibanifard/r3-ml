@@ -1,0 +1,81 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v13 (fewer Gaussians, high fidelity)
+#
+# Builds on config_v12.yml (off-grid generalisation fix: uniform_sample_frac +
+# lambda_coverage/lambda_aniso), adding the other half of the ask: reconstruct
+# with FEWER Gaussians without giving up fidelity.
+#
+# Why max_gaussians has to come down, not just the loss weights:
+#   config_v11.yml's own sweep already tried lambda_aniso/count/L1/coverage
+#   with max_gaussians left at a large ceiling, and found "N always saturated
+#   the ceiling regardless" -- the loss terms alone don't reduce N when there's
+#   room to keep growing. The ceiling is the load-bearing lever; b_211/config.json
+#   (config_v2.yml) used max_gaussians=50000, which is why it has 50,000
+#   Gaussians. This project's own documented per-block target capacity is 5000
+#   (see CLAUDE.md's train_all_blocks.py launch command, --max_gauss 5000) --
+#   v13 makes that the real ceiling instead of an oversized safety valve.
+#
+# Why fidelity shouldn't collapse 10x just because N does:
+#   lambda_coverage + lambda_aniso (from v12) push densification toward fewer,
+#   larger, overlapping ellipsoids rather than many tiny disjoint ones -- i.e.
+#   each Gaussian is pushed to cover more of the volume, which is exactly what
+#   is needed to keep fidelity reasonable at a much smaller N. v13 adds the
+#   two remaining count-minimising terms that config_v11.yml identified but
+#   never actually exercised (left at 0.0 in every prior config):
+#     - lambda_count : soft-L0 penalty, pulls borderline/redundant Gaussians
+#                      toward extinction before they get counted at all.
+#     - lambda_L1    : steady pull toward v_k=0 on every Gaussian, finishing
+#                      off the zombie population lambda_count's vanishing
+#                      gradient leaves behind (see _loss_term_L1_intensity).
+#   prune_inten_thresh raised 10x (0.001 -> 0.01, matching config_v11.yml) so
+#   the standalone prune phase is aggressive enough to actually remove what
+#   these losses decay, rather than leaving dead-but-unpruned Gaussians in N.
+#
+# This is a genuine trade-off, not a free lunch: going from 50,000 to 5,000
+# Gaussians (10x) will likely cost some PSNR even with better regularisation.
+# The goal here is the best fidelity achievable at that budget, not matching
+# b_211/best.pth's 40.47 dB with 10x fewer Gaussians for free.
+#
+# Usage (single-block test):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v13.yml \
+#     --volume data/fafb/blocks/image_z32_y31_x31.tif \
+#     --out    fafb_pilot/models/blocks_v13_test/b_211
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v2/v12
+max_gaussians: 5000       # REAL ceiling now (v2/v12 was 50000) -- matches this
+                          # project's own documented per-block target capacity
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # unchanged from v2/v12
+steps_per_epoch: 50       # unchanged -- total steps = 25000
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:  500     # epoch 10  (unchanged from v2/v12)
+densify_until_step: 20000   # epoch 400 (unchanged from v2/v12)
+prune_inten_thresh: 0.01    # 10x default -- aggressive enough to work WITH the
+                             # new sparsity losses below (matches config_v11.yml)
+
+# ── Off-grid generalisation fix (unchanged from v12) ────────────────────────────
+uniform_sample_frac: 0.3    # 30% of each batch drawn from continuous points
+                             # (sample_uniform, trilinear GT) instead of exact
+                             # voxel centres (sample_importance) -- see _3dgs.py
+
+# ── Coverage / anisotropy / count regularisation ────────────────────────────────
+lambda_coverage: 0.01        # rewards larger s_max -> fewer, bigger Gaussians
+lambda_aniso:    0.001       # collapses s_min -> elongated ellipsoids covering
+                             # more space per Gaussian, less redundant overlap
+lambda_count:    0.0001      # soft-L0 penalty -- pulls borderline Gaussians to extinction
+lambda_L1:       0.0001      # steady pull toward v_k=0 -- finishes off zombies
+                             # the count term's vanishing gradient leaves behind
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale,
+# remaining loss weights) are left at scripts/_3dgs/_3dgs.py's argparse defaults.

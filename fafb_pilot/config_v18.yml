@@ -1,0 +1,86 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v18 (bare L1 + SSIM loss,
+# all regularizer coefficients zeroed)
+#
+# Every prior config in this project (v2 through v17) used the elaborate loss
+# stack in scripts/_3dgs/_3dgs.py: L1 + lambda_ssim*(1-SSIM) as the
+# reconstruction term, plus up to nine additional regularizers (lambda_scale,
+# lambda_scale_ceiling, lambda_scale_outlier, lambda_sparsity, lambda_aniso,
+# lambda_count, lambda_L1, lambda_coverage, lambda_overlap). v18 strips all of
+# that back to exactly:
+#
+#   L = 0.7 * L1 + 0.3 * (1 - SSIM)
+#
+# via two new pieces added to scripts/_3dgs/_3dgs.py for this:
+#   - l1_weight (new argparse flag, default 1.0): scales the base L1 term in
+#     _loss_term_mse, which previously had an implicit, unscaleable weight
+#     of exactly 1.0 regardless of lambda_ssim (the old formula was
+#     L1 + lambda_ssim*(1-SSIM), NOT a proper convex combination).
+#   - lambda_ssim: already existed, reused here as the (1-SSIM) weight.
+# Every other lambda_* is set to 0.0 below (scale/scale_ceiling/scale_outlier/
+# sparsity/aniso/count/L1_intensity/coverage/overlap/grad) -- the reconstruction
+# term above is the ENTIRE loss.
+#
+# Kept from v16 (these are not loss regularizers, so "all reg coefs zero"
+# doesn't apply to them): densify_thresh_population_exponent (the structural
+# growth throttle -- v16 alone got N=30,673/vol_PSNR=34.76dB), prune_inten_thresh,
+# scale_max_hard (a hard architectural clamp, not a loss weight), and
+# uniform_sample_frac (a sampling strategy, not a loss term).
+#
+# This tests whether the elaborate regularizer stack was actually pulling its
+# weight, or whether a plain L1+SSIM loss does comparably (or better/worse)
+# once the structural fixes (growth throttle, off-grid sampling) are already
+# doing the real work.
+#
+# Usage (single-block test):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v18.yml \
+#     --volume data/fafb/blocks/image_z32_y31_x31.tif \
+#     --out    fafb_pilot/models/blocks_v18_test/b_211
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v16
+max_gaussians: 50000      # non-binding -- population controlled by the throttle below
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # unchanged from v16
+steps_per_epoch: 50       # unchanged -- total steps = 25000
+
+# ── Densification (clone / split / prune) -- structural, not a loss term ──────
+densify_from_step:  500     # epoch 10  (unchanged from v16)
+densify_until_step: 20000   # epoch 400 (unchanged from v16)
+prune_inten_thresh: 0.01    # unchanged from v16
+densify_thresh_population_exponent: 0.8   # unchanged from v16 -- v16 alone
+                                            # got N=30,673/vol_PSNR=34.76dB
+
+# ── Off-grid generalisation fix -- a sampling strategy, not a loss term ────────
+uniform_sample_frac: 0.3    # unchanged from v16
+
+# ── Architectural clamp -- not a loss weight ────────────────────────────────────
+scale_max_hard: 0.15        # unchanged from v16
+
+# ── Reconstruction loss: L = 0.7*L1 + 0.3*(1-SSIM), nothing else ───────────────
+l1_weight:   0.7
+lambda_ssim: 0.3
+
+# ── Every other regulariser explicitly zeroed ──────────────────────────────────
+lambda_scale:         0.0
+lambda_scale_ceiling: 0.0
+lambda_scale_outlier: 0.0
+lambda_sparsity:      0.0
+lambda_aniso:         0.0
+lambda_count:         0.0
+lambda_L1:            0.0
+lambda_coverage:      0.0
+lambda_overlap:       0.0
+lambda_grad:          0.0
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale,
+# ssim_crop, etc.) are left at scripts/_3dgs/_3dgs.py's argparse defaults.

@@ -1,0 +1,73 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v12 (off-grid generalisation)
+#
+# Same base schedule as config_v2.yml (the config b_211/best.pth was actually
+# trained with: n_init/max_gaussians/epochs/densify window all unchanged), but
+# targets a different failure mode discovered by evaluating b_211's fitted
+# field F(x) off the training voxel grid (see fafb_pilot/code/renderer/test.ipynb):
+#
+#   - On the exact 64^3 training voxel centres, F(x) matches ground truth
+#     almost perfectly (~40 dB PSNR, corr ~0.999) -- the fit itself is good.
+#   - A single half-voxel step off that grid -- the closest possible point to
+#     training data that was never itself supervised -- PSNR collapses to
+#     ~21 dB (corr ~0.95). The model generalises very poorly between the
+#     points it was trained on.
+#
+# Root cause, from scripts/_3dgs/_3dgs.py:
+#   1. VolumeDataset.sample() (the only sampling method the training loop
+#      calls) was hardcoded to sample_importance(), which always snaps to
+#      exact voxel centres -- training never once supervises a continuous,
+#      off-grid point. sample_uniform() (continuous points + trilinear GT)
+#      existed but was never wired into training.
+#   2. lambda_coverage / lambda_aniso -- the two loss terms in _3dgs.py
+#      designed to bias densification toward fewer, larger, overlapping
+#      ellipsoids instead of many tiny disjoint ones -- were left at their
+#      0.0 argparse default for b_211 (see models/blocks_v2/b_211/config.json).
+#
+# v12 addresses both:
+#   - uniform_sample_frac: 0.3 mixes continuous off-grid points (trilinear GT)
+#     into 30% of every training batch, via the newly-added
+#     VolumeDataset.sample() blending path -- directly supervising the
+#     off-grid behaviour that was previously never trained against at all.
+#   - lambda_coverage / lambda_aniso enabled, to bias densification toward
+#     fewer, larger, overlapping Gaussians that generalise between samples
+#     instead of tiny disjoint bumps that only fit their own voxel.
+#
+# Usage (single-block test):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v12.yml \
+#     --volume data/fafb/blocks/image_z32_y31_x31.tif \
+#     --out    fafb_pilot/models/blocks_v12_test/b_211
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v2
+max_gaussians: 50000      # unchanged from v2
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # unchanged from v2
+steps_per_epoch: 50       # unchanged -- total steps = 25000
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:  500     # epoch 10  (unchanged from v2)
+densify_until_step: 20000   # epoch 400 (unchanged from v2)
+
+# ── Off-grid generalisation fix ─────────────────────────────────────────────────
+uniform_sample_frac: 0.3    # 30% of each batch drawn from continuous points
+                             # (sample_uniform, trilinear GT) instead of exact
+                             # voxel centres (sample_importance) -- see _3dgs.py
+
+# ── Coverage / anisotropy regularisation ────────────────────────────────────────
+lambda_coverage: 0.01        # rewards larger s_max -> fewer, bigger Gaussians
+lambda_aniso:    0.001       # collapses s_min -> elongated ellipsoids covering
+                             # more space per Gaussian, less redundant overlap
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale,
+# prune-only phase, remaining loss weights) are left at scripts/_3dgs/_3dgs.py's
+# argparse defaults, matching v2's approach of not retuning per-block.

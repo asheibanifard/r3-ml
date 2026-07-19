@@ -1,0 +1,88 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v17 (add overlap
+# regularisation back in, now for a different purpose than v14 tried it for)
+#
+# config_v14.yml tried lambda_overlap as a way to suppress the growth TRIGGER
+# itself (avg_g > densify_grad_thresh) and disproved it across three orders of
+# magnitude (0.001/0.01/1.0 all hit N=50000 at the identical step) -- the
+# trigger reacts to gradient magnitude, and any loss term's gradient on
+# `means` can only add to that magnitude, never cancel it. That's why v15/v16
+# instead throttle the trigger's threshold directly
+# (densify_thresh_population_exponent), which does work (v16: N=30,673,
+# vol_PSNR=34.76 dB).
+#
+# Now that population size is controlled by that throttle instead, adding
+# lambda_overlap back in serves a genuinely different role: within whatever
+# population the throttle settles on, it penalises pairs of co-located,
+# similarly-sized Gaussians (via _loss_term_overlap's k-NN pairwise Gaussian-
+# product-overlap integral, weighted by both Gaussians' intensity). That
+# pressure doesn't need to fight the growth trigger -- it acts on the
+# INTENSITY of redundant Gaussians, pushing genuinely-overlapping ones toward
+# v_k=0, which then makes them eligible for prune_only() to remove on its
+# regular cadence. The goal here isn't fewer Gaussians via a different route
+# to the same N -- it's better use of the ~30k the throttle already allows:
+# less wasted overlap should mean more of the budget is spent covering
+# distinct volume, which should show up as higher fidelity at a similar (or
+# possibly lower, if genuinely redundant Gaussians get pruned away) N.
+#
+# _loss_term_overlap's numerical-stability fix (diagonal jitter on Sigma_sum
+# before inversion, exponent clamp before exp()) is already in place in
+# _3dgs.py from the v14 crash investigation, so this is safe at the weights
+# tested there (up to 1.0) -- starting conservative here since this is a new
+# combination (throttle + overlap together) that hasn't been tested.
+#
+# Only change from v16: lambda_overlap, 0.0 -> 0.01.
+#
+# Usage (single-block test):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v17.yml \
+#     --volume data/fafb/blocks/image_z32_y31_x31.tif \
+#     --out    fafb_pilot/models/blocks_v17_test/b_211
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v16
+max_gaussians: 50000      # non-binding -- population controlled by the throttle below
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # unchanged from v16
+steps_per_epoch: 50       # unchanged -- total steps = 25000
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:  500     # epoch 10  (unchanged from v16)
+densify_until_step: 20000   # epoch 400 (unchanged from v16)
+prune_inten_thresh: 0.01    # unchanged from v16 -- important here: this is what
+                             # actually removes Gaussians lambda_overlap decays
+
+# ── Structural growth throttle (unchanged from v16) ─────────────────────────────
+densify_thresh_population_exponent: 0.8
+
+# ── Off-grid generalisation fix (unchanged from v16) ────────────────────────────
+uniform_sample_frac: 0.3
+
+# ── Coverage / anisotropy / count / overlap regularisation ─────────────────────
+lambda_coverage: 0.01        # unchanged from v16
+lambda_aniso:    0.001       # unchanged from v16
+lambda_count:    0.0001      # unchanged from v16
+lambda_L1:       0.0001      # unchanged from v16
+scale_max_hard:  0.15        # unchanged from v16 -- also keeps Sigma_sum in
+                             # lambda_overlap's inversion well-conditioned
+lambda_overlap:  1.0         # 0.01 (first attempt) showed no real effect --
+                             # N=30,835/vol_PSNR=34.10 dB, statistically
+                             # indistinguishable from v16's 30,673/34.76 dB
+                             # baseline (if anything slightly worse, i.e. noise).
+                             # Jumping to 1.0 (100x) rather than another
+                             # incremental step -- matches the same lesson
+                             # learned tuning densify_thresh_population_exponent,
+                             # and 1.0 is already validated as numerically
+                             # stable (see v14's crash investigation).
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale,
+# overlap_n_query/overlap_k_neighbors, remaining loss weights) are left at
+# scripts/_3dgs/_3dgs.py's argparse defaults.

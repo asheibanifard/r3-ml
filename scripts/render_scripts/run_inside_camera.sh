@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CUDA_SOURCE="${CUDA_SOURCE:-${SCRIPT_DIR}/gaussian_mip_inside_camera.cu}"
 EXPORT_SCRIPT="${EXPORT_SCRIPT:-${SCRIPT_DIR}/export_gaussians.py}"
-CHECKPOINT="${CHECKPOINT:-models_smoke/block_z000_y001_x006/best.pth}"
+CHECKPOINT="${CHECKPOINT:-/root/project/fafb_pilot/results/seam_cubes/b211_b212/hard_partition_gaussians.pth}"
 
 GAUSSIAN_BIN="${GAUSSIAN_BIN:-${SCRIPT_DIR}/gaussians.bin}"
 EXECUTABLE="${EXECUTABLE:-${SCRIPT_DIR}/gaussian_mip_inside_camera}"

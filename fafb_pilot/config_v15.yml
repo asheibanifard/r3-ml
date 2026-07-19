@@ -1,0 +1,78 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v15 (structural growth
+# throttle, replacing the disproven loss-term approach)
+#
+# config_v14.yml tried to make densification self-limiting via lambda_overlap
+# (a k-NN pairwise Gaussian-overlap penalty), leaving max_gaussians at 50000 so
+# the ceiling wasn't what stopped growth. Empirically disproven: three weights
+# spanning three orders of magnitude (0.001, 0.01, 1.0) all hit N=50000 at the
+# EXACT same step (1800/epoch 36). Root cause, mechanistically: split_and_clone's
+# trigger (avg_g > densify_grad_thresh) reacts to gradient MAGNITUDE. Any extra
+# loss term's gradient on `means` (including lambda_overlap pushing Gaussians
+# apart) only ADDS to that magnitude -- it cannot cancel the reconstruction
+# gradient that's actually driving growth. No loss-term weight, however large,
+# can structurally suppress a magnitude-based trigger this way.
+#
+# v15 fixes the trigger itself instead of fighting it with a loss term:
+# densify_thresh_population_exponent (new argparse flag, scripts/_3dgs/_3dgs.py)
+# scales the effective threshold by (N / n_init) ** exponent, so the bar for
+# triggering growth rises directly with population size -- a real negative
+# feedback loop tied to N, which cannot be worked around the way a loss term's
+# gradient contribution can. exponent=0 reproduces the old fixed-threshold
+# behavior exactly (used by every prior config in this project).
+#
+# lambda_overlap is dropped back to 0 here: it had zero measurable effect on
+# population and added real compute (k-NN search every step, ~3-4x slower).
+# scale_max_hard is kept from v14 (good numerical hygiene, no observed downside).
+#
+# Usage (single-block test):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v15.yml \
+#     --volume data/fafb/blocks/image_z32_y31_x31.tif \
+#     --out    fafb_pilot/models/blocks_v15_test/b_211
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v2/v12/v13/v14
+max_gaussians: 50000      # non-binding again -- densify_thresh_population_exponent
+                          # (below) is what should keep N down this time
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # unchanged from v2/v12/v13/v14
+steps_per_epoch: 50       # unchanged -- total steps = 25000
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:  500     # epoch 10  (unchanged from v2/v12/v13/v14)
+densify_until_step: 20000   # epoch 400 (unchanged from v2/v12/v13/v14)
+prune_inten_thresh: 0.01    # 10x default -- aggressive enough to actually
+                             # remove what the sparsity losses decay
+
+# ── NEW: structural growth throttle ─────────────────────────────────────────────
+densify_thresh_population_exponent: 1.0
+  # effective_grad_thresh = densify_grad_thresh * (N / n_init) ** 1.0
+  # i.e. the threshold scales linearly with how many Gaussians already exist.
+  # At N=6000 (6x n_init) the bar is already 6x higher; at N=40000 it's 40x
+  # higher. Starting at exponent=1.0 (not higher) since this is untested --
+  # see train.log for whether it's enough, or whether it needs to be steeper.
+
+# ── Off-grid generalisation fix (unchanged from v12/v13/v14) ────────────────────
+uniform_sample_frac: 0.3
+
+# ── Coverage / anisotropy / count regularisation (unchanged from v13/v14) ──────
+lambda_coverage: 0.01
+lambda_aniso:    0.001
+lambda_count:    0.0001
+lambda_L1:       0.0001
+scale_max_hard:  0.15        # kept from v14 -- numerical hygiene, no observed
+                             # downside to growth/fidelity in v14's tests
+
+# lambda_overlap intentionally left at its 0.0 argparse default -- see header.
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale,
+# remaining loss weights) are left at scripts/_3dgs/_3dgs.py's argparse defaults.

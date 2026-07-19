@@ -21,14 +21,14 @@ nvcc -O3 -std=c++17 --use_fast_math -lineinfo \
 
 python "${EXPORTER}" \
   dense_voxel \
-  data/smoke_data/blocks/block_z0_y1_x6.h5 \
-  scripts/render_scripts/DVR/gt_volume_016.bin \
+  /root/project/data/fafb/blocks/image_z32_y31_x31.tif \
+  /root/project/fafb_pilot/code/visualisation/DVR/export_renderer_bin.bin \
   --dataset raw \
   --normalise minmax
 
 "${CUDA_EXE}" \
   dense_voxel \
-  scripts/render_scripts/DVR/gt_volume_016.bin \
+  /root/project/fafb_pilot/code/visualisation/DVR/export_renderer_bin.bin \
   "${RESULT_DIR}/gt_block016_yaw0_pitch0.pfm" \
   128 128 \
   64 \
@@ -50,8 +50,8 @@ python "${PFM_CONVERTER}" \
 
 python "${EXPORTER}" \
   pretrained_gaussian \
-  models_smoke/block_z000_y001_x006/best.pth \
-  scripts/render_scripts/DVR/gaussians_016.bin \
+  /root/project/fafb_pilot/models/blocks_v2/b_211/best.pth \
+  /root/project/fafb_pilot/code/visualisation/DVR/export_renderer_bin.bin \
   --means-key means \
   --scales-key log_scales \
   --quaternions-key quats \
@@ -62,7 +62,7 @@ python "${EXPORTER}" \
 
 "${CUDA_EXE}" \
   pretrained_gaussian \
-  scripts/render_scripts/DVR/gaussians_016.bin \
+  /root/project/fafb_pilot/code/visualisation/DVR/export_renderer_bin.bin \
   "${RESULT_DIR}/rec_block016_yaw0_pitch0.pfm" \
   128 128 \
   64 \
@@ -75,4 +75,4 @@ python "${EXPORTER}" \
 python "${PFM_CONVERTER}" \
   "${RESULT_DIR}/rec_block016_yaw0_pitch0.pfm" \
   "${RESULT_DIR}/rec_block016_yaw0_pitch0.png" \
-  --vmin 0 --vmax 1
+  # --vmin 0 --vmax 1

@@ -1,0 +1,77 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v16 (trade back some of
+# v15's Gaussian reduction for higher fidelity)
+#
+# config_v15.yml's densify_thresh_population_exponent=1.0 produced a genuine
+# self-regulating equilibrium: N plateaued at 19,676 (steady-state clone/prune
+# balance confirmed from step 16,400 to densify_until_step=20,000, not just cut
+# off by the schedule), vol_PSNR=32.16 dB. That's a real ~2.5x reduction from
+# the original 50,000-Gaussian baseline (40.47 dB), at a real ~8 dB fidelity
+# cost.
+#
+# v16 asks for more fidelity, at the cost of some of that Gaussian reduction.
+# First attempt halved the exponent outright (1.0 -> 0.5) and that overshot
+# badly: N hit N=49,804 (essentially the full 50,000 ceiling) by epoch 45 --
+# not a moderate increase, almost a full collapse of the throttle. Because
+# effective_thresh = grad_thresh * (N/n_init)^exponent is a power law, the gap
+# between exponent values widens multiplicatively as N grows, so a "halve it"
+# step is far too coarse -- 1.0 and 0.5 turn out to be near-opposite ends of
+# the useful range, not adjacent points on it.
+#
+# v16 now tries 0.8 -- a much smaller step down from 1.0 -- aiming for
+# something between 19,676 and 50,000 (hopefully well below 50,000, given how
+# sensitive this knob turned out to be).
+#
+# Only change from v15: densify_thresh_population_exponent, 1.0 -> 0.8.
+# Everything else (uniform_sample_frac, lambda_coverage/aniso/count/L1,
+# scale_max_hard, schedule) is unchanged, to isolate the effect of this one
+# knob.
+#
+# Usage (single-block test):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v16.yml \
+#     --volume data/fafb/blocks/image_z32_y31_x31.tif \
+#     --out    fafb_pilot/models/blocks_v16_test/b_211
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v15
+max_gaussians: 50000      # non-binding -- still relying on the population-scaled
+                          # threshold below, not a hard cap
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # unchanged from v15
+steps_per_epoch: 50       # unchanged -- total steps = 25000
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:  500     # epoch 10  (unchanged from v15)
+densify_until_step: 20000   # epoch 400 (unchanged from v15)
+prune_inten_thresh: 0.01    # unchanged from v15
+
+# ── Structural growth throttle -- ONLY CHANGE FROM v15 ──────────────────────────
+densify_thresh_population_exponent: 0.8
+  # v15 used 1.0 -> N plateaued at 19,676, vol_PSNR=32.16 dB.
+  # 0.5 (first attempt, since overwritten) hit N=49,804 by epoch 45 -- far too
+  # big a step given the power-law sensitivity of this knob. 0.8 is a much
+  # smaller move down from 1.0.
+
+# ── Off-grid generalisation fix (unchanged from v15) ────────────────────────────
+uniform_sample_frac: 0.3
+
+# ── Coverage / anisotropy / count regularisation (unchanged from v15) ──────────
+lambda_coverage: 0.01
+lambda_aniso:    0.001
+lambda_count:    0.0001
+lambda_L1:       0.0001
+scale_max_hard:  0.15
+
+# lambda_overlap intentionally left at its 0.0 argparse default (see v14/v15).
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale,
+# remaining loss weights) are left at scripts/_3dgs/_3dgs.py's argparse defaults.

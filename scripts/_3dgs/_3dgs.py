@@ -842,12 +842,33 @@ class GaussianCloud:
         divisor     = cfg.split_scale_divisor
         log_floor   = cfg.log_scale_floor
 
+        # Population-scaled growth threshold: raw grad_thresh has no notion of
+        # "enough Gaussians already" -- avg_g > grad_thresh fires purely on
+        # local reconstruction-error gradient, which real textured data almost
+        # never lets fall below a fixed threshold everywhere, so growth is a
+        # one-way ratchet up to max_gaussians regardless of loss-term
+        # regularisation (lambda_overlap, tested across 0.001-1.0, made no
+        # measurable difference to the growth trajectory -- any additional
+        # loss term's gradient on `means` only adds to avg_g's magnitude, it
+        # can't reduce it, so it structurally cannot suppress this trigger).
+        # densify_thresh_population_exponent > 0 makes the *threshold* rise
+        # with population instead, which the growth signal cannot work around:
+        # effective_thresh = grad_thresh * (N / n_init) ** exponent.
+        # exponent=0 (default) reproduces the original fixed threshold exactly.
+        population_exponent = float(getattr(cfg, 'densify_thresh_population_exponent', 0.0))
+        if population_exponent > 0.0:
+            population_ref = max(float(getattr(cfg, 'n_init', 1)), 1.0)
+            population_factor = (float(self.N) / population_ref) ** population_exponent
+            effective_grad_thresh = grad_thresh * max(population_factor, 1.0)
+        else:
+            effective_grad_thresh = grad_thresh
+
         with torch.no_grad():
             avg_g  = self._grad_acc / self._grad_count.clamp(min=1.0)
             curr_s = torch.exp(self.log_s).max(-1).values
             in_box = self.aabb.to(device).contains(self.means)
 
-            high_g = avg_g  > grad_thresh
+            high_g = avg_g  > effective_grad_thresh
             small  = curr_s < max_scale
             dim    = F.softplus(self.inten) < cfg.prune_inten_thresh
             alive  = in_box & ~dim
@@ -1422,6 +1443,7 @@ def _loss_term_mse(ctx: _LossContext) -> torch.Tensor:
         l1 = (w * residuals).sum() / w.sum()
     else:
         l1 = residuals.mean()
+    l1 = float(getattr(ctx.cfg, 'l1_weight', 1.0)) * l1
     ssim_start = int(getattr(ctx.cfg, 'ssim_start_step', 0))
     if ctx.step >= ssim_start:
         if ctx.ssim_pred is not None and ctx.ssim_gt_flat is not None:
@@ -1643,12 +1665,24 @@ def _loss_term_overlap(ctx: _LossContext, n_query: int = 512,
     Sigma_sum = q_Sigma.unsqueeze(1) + n_Sigma                   # (q,k,3,3)
     dmu       = query_means.unsqueeze(1) - n_means               # (q,k,3)
 
-    Sigma_sum_inv = torch.linalg.inv(Sigma_sum)                  # (q,k,3,3)
-    maha = torch.einsum('qki,qkij,qkj->qk', dmu, Sigma_sum_inv, dmu)  # (q,k)
+    # lambda_aniso actively collapses s_min toward log_scale_floor while
+    # lambda_coverage grows s_max, so individual covariances can become highly
+    # eccentric. Two such thin, differently-oriented covariances can sum to a
+    # near-singular Sigma_sum, and torch.linalg.inv on that blows up to
+    # inf/nan under autograd (gradients scale with 1/eigenvalue^2). A small
+    # diagonal jitter keeps Sigma_sum safely invertible without materially
+    # changing the overlap value for any well-conditioned pair.
+    eye = torch.eye(3, device=device, dtype=Sigma_sum.dtype)
+    jitter = 1e-6 * eye
+    Sigma_sum_reg = Sigma_sum + jitter
 
-    log_det_q   = torch.log(torch.linalg.det(q_Sigma).clamp(min=1e-30))    # (q,)
-    log_det_n   = torch.log(torch.linalg.det(n_Sigma).clamp(min=1e-30))    # (q,k)
-    log_det_sum = torch.log(torch.linalg.det(Sigma_sum).clamp(min=1e-30))  # (q,k)
+    Sigma_sum_inv = torch.linalg.inv(Sigma_sum_reg)              # (q,k,3,3)
+    maha = torch.einsum('qki,qkij,qkj->qk', dmu, Sigma_sum_inv, dmu)  # (q,k)
+    maha = maha.clamp(min=0.0)
+
+    log_det_q   = torch.log(torch.linalg.det(q_Sigma).clamp(min=1e-30))       # (q,)
+    log_det_n   = torch.log(torch.linalg.det(n_Sigma).clamp(min=1e-30))       # (q,k)
+    log_det_sum = torch.log(torch.linalg.det(Sigma_sum_reg).clamp(min=1e-30)) # (q,k)
 
     log_prefactor = (
         1.5 * math.log(2.0 * math.pi)
@@ -1656,7 +1690,10 @@ def _loss_term_overlap(ctx: _LossContext, n_query: int = 512,
         + 0.5 * log_det_n
         - 0.5 * log_det_sum
     )
-    overlap = torch.exp(log_prefactor - 0.5 * maha)              # (q,k)
+    # Clamp the exponent, not just the inputs feeding it, as a last line of
+    # defense against float32 overflow from any residual ill-conditioning.
+    exponent = (log_prefactor - 0.5 * maha).clamp(max=50.0)
+    overlap = torch.exp(exponent)                                # (q,k)
 
     weight = q_v.unsqueeze(1) * n_v                              # (q,k)
 
@@ -1962,9 +1999,43 @@ class VolumeDataset:
 
     def sample(self, n: int, device, cfg=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Main sampling interface called by the training loop each step.
+
+        By default, draws every point via sample_importance() -- i.e. every
+        training gradient is taken at an exact voxel centre, and the model
+        never sees the continuous field in between. Setting cfg.uniform_sample_frac
+        > 0 blends in that fraction of each batch from sample_uniform() (truly
+        continuous points, trilinear-interpolated GT), directly supervising the
+        off-grid behaviour that sample_importance alone never touches.
+
         Returns (pts, gt, sample_weights).
         """
-        return self.sample_importance(n, device, cfg=cfg)
+        frac_uniform = float(getattr(cfg, 'uniform_sample_frac', 0.0)) if cfg is not None else 0.0
+
+        if frac_uniform <= 0.0:
+            return self.sample_importance(n, device, cfg=cfg)
+
+        n_uniform = max(0, min(n, int(round(n * frac_uniform))))
+        n_importance = n - n_uniform
+
+        pts_parts, gt_parts, w_parts = [], [], []
+
+        if n_importance > 0:
+            pts_i, gt_i, w_i = self.sample_importance(n_importance, device, cfg=cfg)
+            pts_parts.append(pts_i)
+            gt_parts.append(gt_i)
+            w_parts.append(w_i)
+
+        if n_uniform > 0:
+            pts_u, gt_u, w_u = self.sample_uniform(n_uniform, device, cfg=cfg)
+            pts_parts.append(pts_u)
+            gt_parts.append(gt_u)
+            w_parts.append(w_u)
+
+        return (
+            torch.cat(pts_parts, dim=0),
+            torch.cat(gt_parts, dim=0),
+            torch.cat(w_parts, dim=0),
+        )
 
     def swc_init_points(self) -> torch.Tensor:
         """Return SWC skeleton points in [-1,1]³, or an empty (0,3) tensor."""
@@ -2490,6 +2561,12 @@ def parse_args() -> argparse.Namespace:
                    help="Coverage reward: -log(s_max/init_scale); rewards large elongated ellipsoids")
     p.add_argument("--lambda_ssim",   type=float, default=0.2,
                    help="Weight of SSIM slice loss in the reconstruction term (GaussianPile)")
+    p.add_argument("--l1_weight",     type=float, default=1.0,
+                   help="Weight of the base L1 reconstruction term in _loss_term_mse, "
+                        "so the reconstruction term is l1_weight*L1 + lambda_ssim*(1-SSIM) "
+                        "instead of L1 always at implicit weight 1. Default 1.0 reproduces "
+                        "the original (unscaled L1) behavior exactly. Set l1_weight=0.7 and "
+                        "lambda_ssim=0.3 for L = 0.7*L1 + 0.3*(1-SSIM).")
     p.add_argument("--lambda_grad",   type=float, default=0.0,
                    help="Weight of gradient sharpness loss on Z-slice crops (edge preservation)")
     p.add_argument("--lambda_overlap", type=float, default=0.0,
@@ -2504,6 +2581,12 @@ def parse_args() -> argparse.Namespace:
     p.set_defaults(only_mse_overlap=False)
     p.add_argument("--grad_sample_weight", type=float, default=0.0,
                    help="Fraction of importance-sampling CDF mass given to high-gradient voxels (0=off, 0.5=equal mix)")
+    p.add_argument("--uniform_sample_frac", type=float, default=0.0,
+                   help="Fraction of each training batch drawn from continuous, off-grid points "
+                        "(VolumeDataset.sample_uniform, trilinear GT) instead of exact voxel "
+                        "centres (sample_importance). 0=off (all voxel-center samples, the "
+                        "long-standing default); training never otherwise supervises the field "
+                        "away from the discrete voxel grid.")
     p.add_argument("--interior_init_n", type=int, default=0,
                    help="Extra Gaussians seeded at bright interior voxels to fill the soma (0=off)")
     p.add_argument("--interior_init_thresh", type=float, default=0.3,
@@ -2556,6 +2639,15 @@ def parse_args() -> argparse.Namespace:
                         "acquire opacity before being judged by prune_only()). "
                         "Defaults to --densify_interval if unset.")
     p.add_argument("--densify_grad_thresh", type=float, default=2e-4)
+    p.add_argument("--densify_thresh_population_exponent", type=float, default=0.0,
+                   help="If > 0, split_and_clone()'s effective grad threshold scales as "
+                        "densify_grad_thresh * (N / n_init) ** exponent, making growth "
+                        "progressively harder to trigger as the population grows -- a "
+                        "structural alternative to loss-term regularisation (lambda_overlap "
+                        "etc.), which cannot suppress this trigger since it only reacts to "
+                        "gradient magnitude and any additional loss term can only add to "
+                        "that magnitude. 0 (default) reproduces the fixed-threshold behavior "
+                        "exactly.")
     p.add_argument("--densify_max_scale",   type=float, default=0.04)
     p.add_argument("--split_scale_divisor", type=float, default=1.6,
                    help="Scale shrink factor applied to split daughters")

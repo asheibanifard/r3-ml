@@ -5,7 +5,7 @@ Unified binary exporter for the adaptive CUDA inside-camera renderer.
 Supported modes
 ---------------
 1. dense_voxel
-   Input: .npy, .h5, or .hdf5 dense voxel block
+   Input: .npy, .h5, .hdf5, .tif, or .tiff dense voxel block
    Output magic: VOXL (0x564F584C)
 
 2. pretrained_gaussian
@@ -78,9 +78,18 @@ def load_dense_volume(path: Path, dataset: str) -> np.ndarray:
                     f"Available datasets: {list(file.keys())}"
                 )
             volume = file[dataset][...]
+    elif suffix in {".tif", ".tiff"}:
+        try:
+            import tifffile
+        except ImportError as error:
+            raise RuntimeError(
+                "tifffile is required for TIFF input: pip install tifffile"
+            ) from error
+
+        volume = tifffile.imread(path)
     else:
         raise ValueError(
-            "Dense voxel input must be .npy, .h5, or .hdf5."
+            "Dense voxel input must be .npy, .h5, .hdf5, .tif, or .tiff."
         )
 
     volume = np.asarray(volume)
@@ -94,29 +103,10 @@ def load_dense_volume(path: Path, dataset: str) -> np.ndarray:
     return volume
 
 
-def export_dense_voxel(
-    input_path: Path,
+def write_dense_voxel_binary(
     output_path: Path,
-    dataset: str,
-    normalise: str,
-) -> None:
-    volume = load_dense_volume(input_path, dataset).astype(
-        np.float32,
-        copy=False,
-    )
-
-    if not np.isfinite(volume).all():
-        raise ValueError("Dense volume contains NaN or Inf.")
-
-    if normalise == "minmax":
-        minimum = float(volume.min())
-        maximum = float(volume.max())
-
-        if maximum > minimum:
-            volume = (volume - minimum) / (maximum - minimum)
-        else:
-            volume = np.zeros_like(volume)
-
+    volume: np.ndarray,
+) -> int:
     depth, height, width = volume.shape
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,6 +134,34 @@ def export_dense_voxel(
             f"Dense binary size mismatch: expected {expected_size}, "
             f"got {actual_size}."
         )
+
+    return actual_size
+
+
+def export_dense_voxel(
+    input_path: Path,
+    output_path: Path,
+    dataset: str,
+    normalise: str,
+) -> None:
+    volume = load_dense_volume(input_path, dataset).astype(
+        np.float32,
+        copy=False,
+    )
+
+    if not np.isfinite(volume).all():
+        raise ValueError("Dense volume contains NaN or Inf.")
+
+    if normalise == "minmax":
+        minimum = float(volume.min())
+        maximum = float(volume.max())
+
+        if maximum > minimum:
+            volume = (volume - minimum) / (maximum - minimum)
+        else:
+            volume = np.zeros_like(volume)
+
+    actual_size = write_dense_voxel_binary(output_path, volume)
 
     print("Representation: dense_voxel")
     print(f"Input: {input_path}")
@@ -412,6 +430,126 @@ def export_pretrained_gaussian(
     print(f"Bytes: {actual_size}")
 
 
+def export_voxelized_gaussian(
+    input_path: Path,
+    output_path: Path,
+    checkpoint_root: str | None,
+    means_key: str,
+    scales_key: str,
+    quaternions_key: str,
+    intensity_key: str,
+    scale_activation: str,
+    intensity_activation: str,
+    quaternion_order: str,
+    grid_size: int,
+    mahalanobis_cutoff: float,
+    grid_chunk_size: int,
+) -> None:
+    """Evaluate the Gaussian mixture on the same regular voxel grid used at
+    training time (cell-centred samples over [-1, 1]^3) and write it out as a
+    VOXL dense volume.
+
+    This lets the reconstruction be compared against ground truth through the
+    exact same dense_voxel MIP path (bounded trilinear texture sampling) used
+    for the real EM block, instead of the raw ray-marched Gaussian-sum path
+    (render_gaussian_mip_kernel), which samples the field continuously and can
+    expose overfitting between training grid points -- see the mismatch
+    between a voxel-grid reconstruction (matches GT closely) and a continuous
+    MIP render (does not).
+    """
+    import torch
+
+    checkpoint = load_torch_checkpoint(input_path)
+    container = resolve_root(checkpoint, checkpoint_root)
+
+    means = to_nxk(to_tensor(resolve_value(container, means_key)), 3, "means")
+    scales = to_nxk(to_tensor(resolve_value(container, scales_key)), 3, "scales")
+    quaternions = to_nxk(
+        to_tensor(resolve_value(container, quaternions_key)), 4, "quaternions"
+    )
+    intensity = to_nxk(
+        to_tensor(resolve_value(container, intensity_key)), 1, "intensity"
+    ).squeeze(-1)
+
+    scales = apply_activation(scales, scale_activation, "scale")
+    intensity = apply_activation(intensity, intensity_activation, "intensity")
+    quaternions = torch.nn.functional.normalize(quaternions, dim=-1)
+
+    if quaternion_order == "xyzw":
+        quaternions = quaternions[:, [3, 0, 1, 2]]
+    elif quaternion_order != "wxyz":
+        raise ValueError("quaternion-order must be wxyz or xyzw.")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    means = means.to(device)
+    scales = scales.to(device)
+    quaternions = quaternions.to(device)
+    intensity = intensity.to(device)
+
+    w, x, y, z = (
+        quaternions[:, 0],
+        quaternions[:, 1],
+        quaternions[:, 2],
+        quaternions[:, 3],
+    )
+    rotation = torch.stack(
+        [
+            1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+            2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+            2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y),
+        ],
+        dim=-1,
+    ).reshape(-1, 3, 3)
+
+    variance = scales ** 2
+    covariance = torch.einsum("nij,nj,nkj->nik", rotation, variance, rotation)
+    inverse_covariance = torch.linalg.inv(covariance)
+
+    # Cell-centred grid coordinates over [-1, 1], matching how the renderer's
+    # dense_voxel path implicitly indexes a raw voxel array via normalised
+    # texture coordinates.
+    coords = (
+        torch.arange(grid_size, device=device, dtype=torch.float32) + 0.5
+    ) / grid_size * 2.0 - 1.0
+    grid_z, grid_y, grid_x = torch.meshgrid(coords, coords, coords, indexing="ij")
+    points = torch.stack([grid_x, grid_y, grid_z], dim=-1).reshape(-1, 3)
+
+    density = torch.zeros(points.shape[0], device=device)
+
+    for start in range(0, points.shape[0], grid_chunk_size):
+        end = min(start + grid_chunk_size, points.shape[0])
+        diff = points[start:end, None, :] - means[None, :, :]
+        weighted = torch.einsum("nij,mnj->mni", inverse_covariance, diff)
+        mahalanobis = (diff * weighted).sum(-1)
+        valid = (mahalanobis >= 0) & (mahalanobis <= mahalanobis_cutoff)
+        contribution = torch.where(
+            valid,
+            intensity[None, :] * torch.exp(-0.5 * mahalanobis),
+            torch.zeros_like(mahalanobis),
+        )
+        density[start:end] = contribution.sum(dim=1)
+
+    volume = (
+        density.reshape(grid_size, grid_size, grid_size)
+        .clamp(0.0, 1.0)
+        .cpu()
+        .numpy()
+        .astype(np.float32)
+    )
+
+    actual_size = write_dense_voxel_binary(output_path, volume)
+
+    print("Representation: voxelized_gaussian")
+    print(f"Input: {input_path}")
+    print(f"Output: {output_path}")
+    print(f"Gaussians: {means.shape[0]}")
+    print(f"Grid [D,H,W]: {grid_size} x {grid_size} x {grid_size}")
+    print(
+        f"Range (post-clamp): [{float(volume.min())}, {float(volume.max())}]"
+    )
+    print(f"Bytes: {actual_size}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -422,7 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "representation",
-        choices=("dense_voxel", "pretrained_gaussian"),
+        choices=("dense_voxel", "pretrained_gaussian", "voxelized_gaussian"),
     )
     parser.add_argument("input")
     parser.add_argument("output")
@@ -478,6 +616,28 @@ def build_parser() -> argparse.ArgumentParser:
         default="wxyz",
     )
 
+    parser.add_argument(
+        "--grid-size",
+        type=int,
+        default=64,
+        help="voxelized_gaussian mode: cubic grid resolution to evaluate on.",
+    )
+    parser.add_argument(
+        "--mahalanobis-cutoff",
+        type=float,
+        default=20.0,
+        help=(
+            "voxelized_gaussian mode: matches MAHALANOBIS_CUTOFF in "
+            "Mip_Render_Inside_Volume.cu."
+        ),
+    )
+    parser.add_argument(
+        "--grid-chunk-size",
+        type=int,
+        default=512,
+        help="voxelized_gaussian mode: grid points evaluated per batch.",
+    )
+
     return parser
 
 
@@ -499,7 +659,7 @@ def main() -> None:
             dataset=args.dataset,
             normalise=args.normalise,
         )
-    else:
+    elif args.representation == "pretrained_gaussian":
         export_pretrained_gaussian(
             input_path=input_path,
             output_path=output_path,
@@ -511,6 +671,22 @@ def main() -> None:
             scale_activation=args.scale_activation,
             intensity_activation=args.intensity_activation,
             quaternion_order=args.quaternion_order,
+        )
+    else:
+        export_voxelized_gaussian(
+            input_path=input_path,
+            output_path=output_path,
+            checkpoint_root=args.checkpoint_root,
+            means_key=args.means_key,
+            scales_key=args.scales_key,
+            quaternions_key=args.quaternions_key,
+            intensity_key=args.intensity_key,
+            scale_activation=args.scale_activation,
+            intensity_activation=args.intensity_activation,
+            quaternion_order=args.quaternion_order,
+            grid_size=args.grid_size,
+            mahalanobis_cutoff=args.mahalanobis_cutoff,
+            grid_chunk_size=args.grid_chunk_size,
         )
 
 

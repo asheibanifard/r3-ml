@@ -40,6 +40,7 @@
 // Coordinate conventions:
 //   * Right-handed world.
 //   * At yaw=pitch=roll=0, camera forward is +Z, right is +X, up is +Y.
+//   * Default unit block convention is [0,1]^3 with camera at (0.5,0.5,0.5).
 //   * Positive yaw rotates toward +X.
 //   * Positive pitch rotates toward +Y.
 //   * Roll rotates the image plane around forward.
@@ -58,12 +59,12 @@
 // avoid false-negative culling.
 
 #include <cuda_runtime.h>
+#include <math_constants.h>
 #include <cub/cub.cuh>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cfloat>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -84,8 +85,8 @@
         }                                                                       \
     } while (0)
 
-constexpr uint32_t GAUSSIAN_FILE_MAGIC = 0x47534D50u;
-constexpr uint32_t GAUSSIAN_FILE_VERSION = 1u;
+constexpr uint32_t FILE_MAGIC = 0x47534D50u;
+constexpr uint32_t FILE_VERSION = 1u;
 
 constexpr int TILE_W = 16;
 constexpr int TILE_H = 16;
@@ -117,7 +118,7 @@ struct Range {
     uint32_t end;
 };
 
-struct GaussianFileHeader {
+struct FileHeader {
     uint32_t magic;
     uint32_t version;
     uint64_t count;
@@ -278,7 +279,20 @@ __global__ void preprocess_kernel(
 
     int min_tx=0,max_tx=tiles_x,min_ty=0,max_ty=tiles_y;
 
-    if (cz > support_radius + CAMERA_NEAR) {
+    const float distance_to_camera = sqrtf(
+        relative.x*relative.x +
+        relative.y*relative.y +
+        relative.z*relative.z
+    );
+
+    // If the camera lies inside the Gaussian support sphere, the Gaussian can
+    // affect rays in any direction, so conservatively assign it to all tiles.
+    if (distance_to_camera <= support_radius) {
+        min_tx = 0;
+        max_tx = tiles_x;
+        min_ty = 0;
+        max_ty = tiles_y;
+    } else if (cz > support_radius + CAMERA_NEAR) {
         const float ndc_x = cx/(cz*camera.tan_half_fov_y*camera.aspect);
         const float ndc_y = cy/(cz*camera.tan_half_fov_y);
 
@@ -382,8 +396,8 @@ __device__ inline bool ray_box_exit(
     float& t_enter,
     float& t_exit)
 {
-    float near_t=-FLT_MAX;
-    float far_t=FLT_MAX;
+    float near_t=-CUDART_INF_F;
+    float far_t=CUDART_INF_F;
 
     const float o[3]={origin.x,origin.y,origin.z};
     const float d[3]={direction.x,direction.y,direction.z};
@@ -531,9 +545,9 @@ static std::vector<GaussianDisk> read_gaussians(const std::string& path) {
     std::ifstream stream(path,std::ios::binary);
     if (!stream) throw std::runtime_error("Cannot open "+path);
 
-    GaussianFileHeader header{};
+    FileHeader header{};
     stream.read(reinterpret_cast<char*>(&header),sizeof(header));
-    if (!stream || header.magic!=GAUSSIAN_FILE_MAGIC || header.version!=GAUSSIAN_FILE_VERSION)
+    if (!stream || header.magic!=FILE_MAGIC || header.version!=FILE_VERSION)
         throw std::runtime_error("Invalid Gaussian binary header.");
 
     if (header.count==0 ||
@@ -613,9 +627,9 @@ static CameraGPU make_camera(
     return camera;
 }
 
-class GaussianRenderer {
+class Renderer {
 public:
-    GaussianRenderer(
+    Renderer(
         const std::vector<GaussianDisk>& host,
         int width,
         int height,
@@ -653,7 +667,7 @@ public:
         rebuild_bins();
     }
 
-    ~GaussianRenderer() {
+    ~Renderer() {
         cudaFree(d_input_); cudaFree(d_gaussians_);
         cudaFree(d_counts_); cudaFree(d_offsets_);
         cudaFree(d_keys_in_); cudaFree(d_keys_out_);
@@ -780,675 +794,120 @@ private:
     void* d_sort_temp_=nullptr;
 };
 
-
-// -----------------------------------------------------------------------------
-// Dense voxel input path
-// -----------------------------------------------------------------------------
-
-constexpr uint32_t DENSE_FILE_MAGIC = 0x564F584Cu; // 'VOXL'
-constexpr uint32_t DENSE_FILE_VERSION = 1u;
-
-struct DenseFileHeader {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t depth;
-    uint32_t height;
-    uint32_t width;
-};
-
-static_assert(
-    sizeof(DenseFileHeader) == 20,
-    "Unexpected DenseFileHeader size."
-);
-
-__device__ inline float3 dense_world_to_texture(
-    float3 point,
-    BoxGPU box)
-{
-    const float3 extent = sub3(box.maximum, box.minimum);
-
-    return make_float3(
-        (point.x - box.minimum.x) / extent.x,
-        (point.y - box.minimum.y) / extent.y,
-        (point.z - box.minimum.z) / extent.z
-    );
-}
-
-__global__ void dense_mip_kernel(
-    cudaTextureObject_t texture,
-    float* __restrict__ output,
-    int width,
-    int height,
-    int depth_samples,
-    CameraGPU camera,
-    BoxGPU box)
-{
-    const int px = blockIdx.x * blockDim.x + threadIdx.x;
-    const int py = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if (px >= width || py >= height) {
-        return;
-    }
-
-    const float ndc_x =
-        2.0f * (float(px) + 0.5f) / float(width) - 1.0f;
-    const float ndc_y =
-        1.0f - 2.0f * (float(py) + 0.5f) / float(height);
-
-    const float camera_x =
-        ndc_x * camera.aspect * camera.tan_half_fov_y;
-    const float camera_y =
-        ndc_y * camera.tan_half_fov_y;
-
-    const float3 direction = normalize3(
-        add3(
-            camera.forward,
-            add3(
-                mul3(camera.right, camera_x),
-                mul3(camera.up, camera_y)
-            )
-        )
-    );
-
-    float t_enter = 0.0f;
-    float t_exit = 0.0f;
-
-    if (!ray_box_exit(
-            camera.position,
-            direction,
-            box,
-            t_enter,
-            t_exit)) {
-        output[py * width + px] = 0.0f;
-        return;
-    }
-
-    t_enter = fmaxf(t_enter, CAMERA_NEAR);
-
-    float maximum_value = -FLT_MAX;
-
-    for (int sample = 0; sample < depth_samples; ++sample) {
-        const float u =
-            depth_samples > 1
-                ? float(sample) / float(depth_samples - 1)
-                : 0.5f;
-
-        const float t =
-            t_enter + (t_exit - t_enter) * u;
-
-        const float3 point = add3(
-            camera.position,
-            mul3(direction, t)
-        );
-
-        const float3 texture_position =
-            dense_world_to_texture(point, box);
-
-        const float value = tex3D<float>(
-            texture,
-            texture_position.x,
-            texture_position.y,
-            texture_position.z
-        );
-
-        maximum_value = fmaxf(maximum_value, value);
-    }
-
-    output[py * width + px] =
-        isfinite(maximum_value) ? maximum_value : 0.0f;
-}
-
-static std::vector<float> read_dense_volume(
-    const std::string& path,
-    uint32_t& depth,
-    uint32_t& height,
-    uint32_t& width)
-{
-    std::ifstream stream(path, std::ios::binary);
-
-    if (!stream) {
-        throw std::runtime_error(
-            "Cannot open dense-volume binary: " + path
-        );
-    }
-
-    DenseFileHeader header{};
-
-    stream.read(
-        reinterpret_cast<char*>(&header),
-        sizeof(header)
-    );
-
-    if (!stream ||
-        header.magic != DENSE_FILE_MAGIC ||
-        header.version != DENSE_FILE_VERSION) {
-        throw std::runtime_error(
-            "Invalid dense-volume binary header."
-        );
-    }
-
-    if (header.depth == 0 ||
-        header.height == 0 ||
-        header.width == 0) {
-        throw std::runtime_error(
-            "Dense-volume dimensions must be positive."
-        );
-    }
-
-    const uint64_t voxel_count =
-        uint64_t(header.depth) *
-        uint64_t(header.height) *
-        uint64_t(header.width);
-
-    if (voxel_count >
-        uint64_t(
-            std::numeric_limits<size_t>::max() /
-            sizeof(float)
-        )) {
-        throw std::runtime_error(
-            "Dense volume is too large."
-        );
-    }
-
-    std::vector<float> volume(
-        static_cast<size_t>(voxel_count)
-    );
-
-    stream.read(
-        reinterpret_cast<char*>(volume.data()),
-        static_cast<std::streamsize>(
-            volume.size() * sizeof(float)
-        )
-    );
-
-    if (!stream) {
-        throw std::runtime_error(
-            "Truncated dense-volume binary."
-        );
-    }
-
-    depth = header.depth;
-    height = header.height;
-    width = header.width;
-
-    return volume;
-}
-
-class DenseVoxelRenderer {
-public:
-    DenseVoxelRenderer(
-        const std::vector<float>& host_volume,
-        uint32_t volume_depth,
-        uint32_t volume_height,
-        uint32_t volume_width,
-        int output_width,
-        int output_height,
-        int depth_samples,
-        CameraGPU camera,
-        BoxGPU box)
-        : output_width_(output_width),
-          output_height_(output_height),
-          depth_samples_(depth_samples),
-          camera_(camera),
-          box_(box)
-    {
-        CUDA_CHECK(cudaStreamCreate(&stream_));
-
-        const cudaChannelFormatDesc channel =
-            cudaCreateChannelDesc<float>();
-
-        const cudaExtent extent = make_cudaExtent(
-            volume_width,
-            volume_height,
-            volume_depth
-        );
-
-        CUDA_CHECK(cudaMalloc3DArray(
-            &volume_array_,
-            &channel,
-            extent
-        ));
-
-        cudaMemcpy3DParms copy{};
-        copy.srcPtr = make_cudaPitchedPtr(
-            const_cast<float*>(host_volume.data()),
-            size_t(volume_width) * sizeof(float),
-            volume_width,
-            volume_height
-        );
-        copy.dstArray = volume_array_;
-        copy.extent = extent;
-        copy.kind = cudaMemcpyHostToDevice;
-
-        CUDA_CHECK(cudaMemcpy3DAsync(
-            &copy,
-            stream_
-        ));
-
-        cudaResourceDesc resource{};
-        resource.resType = cudaResourceTypeArray;
-        resource.res.array.array = volume_array_;
-
-        cudaTextureDesc texture{};
-        texture.addressMode[0] = cudaAddressModeClamp;
-        texture.addressMode[1] = cudaAddressModeClamp;
-        texture.addressMode[2] = cudaAddressModeClamp;
-        texture.filterMode = cudaFilterModeLinear;
-        texture.readMode = cudaReadModeElementType;
-        texture.normalizedCoords = 1;
-
-        CUDA_CHECK(cudaCreateTextureObject(
-            &texture_,
-            &resource,
-            &texture,
-            nullptr
-        ));
-
-        CUDA_CHECK(cudaMalloc(
-            &d_output_,
-            size_t(output_width_) *
-            size_t(output_height_) *
-            sizeof(float)
-        ));
-
-        synchronize();
-    }
-
-    ~DenseVoxelRenderer() {
-        if (d_output_) {
-            cudaFree(d_output_);
-        }
-        if (texture_) {
-            cudaDestroyTextureObject(texture_);
-        }
-        if (volume_array_) {
-            cudaFreeArray(volume_array_);
-        }
-        if (stream_) {
-            cudaStreamDestroy(stream_);
-        }
-    }
-
-    DenseVoxelRenderer(const DenseVoxelRenderer&) = delete;
-    DenseVoxelRenderer& operator=(
-        const DenseVoxelRenderer&) = delete;
-
-    void render() {
-        const dim3 block(16, 16);
-        const dim3 grid(
-            div_up(output_width_, int(block.x)),
-            div_up(output_height_, int(block.y))
-        );
-
-        dense_mip_kernel<<<grid, block, 0, stream_>>>(
-            texture_,
-            d_output_,
-            output_width_,
-            output_height_,
-            depth_samples_,
-            camera_,
-            box_
-        );
-
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    void synchronize() {
-        CUDA_CHECK(cudaStreamSynchronize(stream_));
-    }
-
-    cudaStream_t stream() const {
-        return stream_;
-    }
-
-    std::vector<float> download() {
-        std::vector<float> output(
-            size_t(output_width_) *
-            size_t(output_height_)
-        );
-
-        CUDA_CHECK(cudaMemcpyAsync(
-            output.data(),
-            d_output_,
-            output.size() * sizeof(float),
-            cudaMemcpyDeviceToHost,
-            stream_
-        ));
-
-        synchronize();
-
-        return output;
-    }
-
-private:
-    int output_width_{};
-    int output_height_{};
-    int depth_samples_{};
-
-    CameraGPU camera_{};
-    BoxGPU box_{};
-
-    cudaStream_t stream_{};
-    cudaArray_t volume_array_{};
-    cudaTextureObject_t texture_{};
-    float* d_output_{};
-};
-
-// -----------------------------------------------------------------------------
-// Shared command-line and benchmark logic
-// -----------------------------------------------------------------------------
-
-enum class RepresentationType {
-    DenseVoxel,
-    PretrainedGaussian
-};
-
-static RepresentationType parse_representation_type(
-    const std::string& value)
-{
-    if (value == "dense_voxel") {
-        return RepresentationType::DenseVoxel;
-    }
-
-    if (value == "pretrained_gaussian") {
-        return RepresentationType::PretrainedGaussian;
-    }
-
-    throw std::runtime_error(
-        "Invalid representation type '" + value +
-        "'. Expected dense_voxel or pretrained_gaussian."
-    );
-}
-
-static float3 box_center(const BoxGPU& box) {
-    return mul3(
-        add3(box.minimum, box.maximum),
-        0.5f
-    );
-}
-
-template <typename RendererType>
-static std::vector<float> benchmark_and_download(
-    RendererType& renderer,
-    int warmup_frames,
-    int measured_frames,
-    float& mean_render_ms,
-    float& frames_per_second)
-{
-    for (int frame = 0;
-         frame < warmup_frames;
-         ++frame) {
-        renderer.render();
-    }
-
-    renderer.synchronize();
-
-    cudaEvent_t start{};
-    cudaEvent_t stop{};
-
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-
-    CUDA_CHECK(cudaEventRecord(
-        start,
-        renderer.stream()
-    ));
-
-    for (int frame = 0;
-         frame < measured_frames;
-         ++frame) {
-        renderer.render();
-    }
-
-    CUDA_CHECK(cudaEventRecord(
-        stop,
-        renderer.stream()
-    ));
-
-    CUDA_CHECK(cudaEventSynchronize(stop));
-
-    float total_ms = 0.0f;
-
-    CUDA_CHECK(cudaEventElapsedTime(
-        &total_ms,
-        start,
-        stop
-    ));
-
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
-
-    mean_render_ms =
-        total_ms / float(measured_frames);
-
-    frames_per_second =
-        1000.0f / mean_render_ms;
-
-    renderer.render();
-
-    return renderer.download();
-}
-
-int main(int argc, char** argv) {
+int main(int argc,char** argv) {
     try {
-        if (argc != 18) {
+        if (argc!=20) {
             std::cerr
-                << "Usage:\n  "
-                << argv[0]
-                << " <dense_voxel|pretrained_gaussian>"
-                << " input.bin output.pfm"
-                << " width height depth_samples frames"
-                << " yaw pitch roll fov_y"
-                << " min_x min_y min_z"
-                << " max_x max_y max_z\n\n"
-                << "Examples:\n"
-                << "  " << argv[0]
-                << " dense_voxel volume.bin voxel.pfm"
-                << " 128 128 256 200"
-                << " 0 0 0 90"
-                << " -1 -1 -1 1 1 1\n\n"
-                << "  " << argv[0]
-                << " pretrained_gaussian gaussians.bin gaussian.pfm"
-                << " 128 128 64 200"
-                << " 0 0 0 90"
-                << " -1 -1 -1 1 1 1\n";
-
+                <<"Usage:\n  "<<argv[0]
+                <<" input.bin output.pfm width height depth_samples frames"
+                <<" cam_x cam_y cam_z yaw pitch roll fov_y"
+                <<" min_x min_y min_z max_x max_y max_z\n";
             return EXIT_FAILURE;
         }
 
-        const RepresentationType representation =
-            parse_representation_type(argv[1]);
+        const std::string input_path=argv[1];
+        const std::string output_path=argv[2];
+        const int width=std::stoi(argv[3]);
+        const int height=std::stoi(argv[4]);
+        const int depth_samples=std::stoi(argv[5]);
+        const int frames=std::stoi(argv[6]);
 
-        const std::string input_path = argv[2];
-        const std::string output_path = argv[3];
-
-        const int width = std::stoi(argv[4]);
-        const int height = std::stoi(argv[5]);
-        const int depth_samples = std::stoi(argv[6]);
-        const int measured_frames = std::stoi(argv[7]);
-
-        const float yaw = std::stof(argv[8]);
-        const float pitch = std::stof(argv[9]);
-        const float roll = std::stof(argv[10]);
-        const float fov_y = std::stof(argv[11]);
+        const float3 camera_position=make_float3(
+            std::stof(argv[7]),std::stof(argv[8]),std::stof(argv[9])
+        );
+        const float yaw=std::stof(argv[10]);
+        const float pitch=std::stof(argv[11]);
+        const float roll=std::stof(argv[12]);
+        const float fov_y=std::stof(argv[13]);
 
         BoxGPU box{};
-        box.minimum = make_float3(
-            std::stof(argv[12]),
-            std::stof(argv[13]),
-            std::stof(argv[14])
+        box.minimum=make_float3(
+            std::stof(argv[14]),std::stof(argv[15]),std::stof(argv[16])
         );
-        box.maximum = make_float3(
-            std::stof(argv[15]),
-            std::stof(argv[16]),
-            std::stof(argv[17])
+        box.maximum=make_float3(
+            std::stof(argv[17]),std::stof(argv[18]),std::stof(argv[19])
         );
 
-        if (width <= 0 ||
-            height <= 0 ||
-            depth_samples <= 0 ||
-            measured_frames <= 0) {
+        if (width<=0 || height<=0 || depth_samples<=0 || frames<=0)
+            throw std::runtime_error("Dimensions and frames must be positive.");
+        if (!(fov_y>1.0f && fov_y<179.0f))
+            throw std::runtime_error("FOV must be between 1 and 179 degrees.");
+
+        const auto host=read_gaussians(input_path);
+        const CameraGPU camera=make_camera(
+            camera_position,yaw,pitch,roll,fov_y,width,height
+        );
+
+        std::cout<<"Gaussians: "<<host.size()<<"\n";
+        std::cout<<"Camera position: "
+                 <<camera_position.x<<" "
+                 <<camera_position.y<<" "
+                 <<camera_position.z<<"\n";
+        std::cout<<"Yaw/pitch/roll: "
+                 <<yaw<<" "<<pitch<<" "<<roll<<"\n";
+        std::cout<<"Vertical FOV: "<<fov_y<<"\n";
+        std::cout<<"Block minimum: "
+                 <<box.minimum.x<<" "
+                 <<box.minimum.y<<" "
+                 <<box.minimum.z<<"\n";
+        std::cout<<"Block maximum: "
+                 <<box.maximum.x<<" "
+                 <<box.maximum.y<<" "
+                 <<box.maximum.z<<"\n";
+
+        if (
+            camera_position.x < box.minimum.x ||
+            camera_position.x > box.maximum.x ||
+            camera_position.y < box.minimum.y ||
+            camera_position.y > box.maximum.y ||
+            camera_position.z < box.minimum.z ||
+            camera_position.z > box.maximum.z
+        ) {
             throw std::runtime_error(
-                "Dimensions, samples, and frames must be positive."
+                "Camera position is outside the supplied block."
             );
         }
 
-        if (!(fov_y > 1.0f && fov_y < 179.0f)) {
-            throw std::runtime_error(
-                "FOV must be between 1 and 179 degrees."
-            );
-        }
-
-        if (!(box.maximum.x > box.minimum.x &&
-              box.maximum.y > box.minimum.y &&
-              box.maximum.z > box.minimum.z)) {
-            throw std::runtime_error(
-                "Invalid block bounds."
-            );
-        }
-
-        const float3 camera_position =
-            box_center(box);
-
-        const CameraGPU camera = make_camera(
-            camera_position,
-            yaw,
-            pitch,
-            roll,
-            fov_y,
-            width,
-            height
+        Renderer renderer(
+            host,width,height,depth_samples,camera,box
         );
 
-        constexpr int warmup_frames = 20;
+        std::cout<<"Gaussian-tile pairs: "
+                 <<renderer.pair_count()<<"\n";
 
-        std::cout
-            << "Representation: "
-            << (
-                representation ==
-                RepresentationType::DenseVoxel
-                    ? "dense_voxel"
-                    : "pretrained_gaussian"
-            )
-            << "\n"
-            << "Camera centre: "
-            << camera_position.x << " "
-            << camera_position.y << " "
-            << camera_position.z << "\n"
-            << "Yaw/pitch/roll: "
-            << yaw << " "
-            << pitch << " "
-            << roll << "\n"
-            << "Vertical FOV: "
-            << fov_y << "\n"
-            << "Output resolution: "
-            << width << " x " << height << "\n"
-            << "Ray samples: "
-            << depth_samples << "\n";
+        for (int i=0;i<10;++i) renderer.render();
+        renderer.synchronize();
 
-        float mean_render_ms = 0.0f;
-        float frames_per_second = 0.0f;
-        std::vector<float> output;
+        cudaEvent_t start{},stop{};
+        CUDA_CHECK(cudaEventCreate(&start));
+        CUDA_CHECK(cudaEventCreate(&stop));
+        CUDA_CHECK(cudaEventRecord(start,renderer.stream()));
 
-        if (representation ==
-            RepresentationType::DenseVoxel) {
-            uint32_t volume_depth = 0;
-            uint32_t volume_height = 0;
-            uint32_t volume_width = 0;
+        for (int i=0;i<frames;++i) renderer.render();
 
-            const std::vector<float> volume =
-                read_dense_volume(
-                    input_path,
-                    volume_depth,
-                    volume_height,
-                    volume_width
-                );
+        CUDA_CHECK(cudaEventRecord(stop,renderer.stream()));
+        CUDA_CHECK(cudaEventSynchronize(stop));
 
-            std::cout
-                << "Dense volume: "
-                << volume_width << " x "
-                << volume_height << " x "
-                << volume_depth << "\n";
+        float total_ms=0;
+        CUDA_CHECK(cudaEventElapsedTime(&total_ms,start,stop));
+        CUDA_CHECK(cudaEventDestroy(start));
+        CUDA_CHECK(cudaEventDestroy(stop));
 
-            DenseVoxelRenderer renderer(
-                volume,
-                volume_depth,
-                volume_height,
-                volume_width,
-                width,
-                height,
-                depth_samples,
-                camera,
-                box
-            );
+        const float ms=total_ms/float(frames);
+        std::cout<<"Render time: "<<ms<<" ms\n";
+        std::cout<<"FPS: "<<1000.0f/ms<<"\n";
 
-            output = benchmark_and_download(
-                renderer,
-                warmup_frames,
-                measured_frames,
-                mean_render_ms,
-                frames_per_second
-            );
-        } else {
-            const std::vector<GaussianDisk> gaussians =
-                read_gaussians(input_path);
+        renderer.render();
+        auto output=renderer.download();
+        write_pfm(output_path,output,width,height);
 
-            std::cout
-                << "Gaussians: "
-                << gaussians.size() << "\n";
-
-            GaussianRenderer renderer(
-                gaussians,
-                width,
-                height,
-                depth_samples,
-                camera,
-                box
-            );
-
-            std::cout
-                << "Gaussian-tile pairs: "
-                << renderer.pair_count() << "\n";
-
-            output = benchmark_and_download(
-                renderer,
-                warmup_frames,
-                measured_frames,
-                mean_render_ms,
-                frames_per_second
-            );
-        }
-
-        write_pfm(
-            output_path,
-            output,
-            width,
-            height
-        );
-
-        const auto minmax = std::minmax_element(
-            output.begin(),
-            output.end()
-        );
-
-        std::cout
-            << "Mean render time: "
-            << mean_render_ms << " ms\n"
-            << "FPS: "
-            << frames_per_second << "\n"
-            << "Output range: ["
-            << *minmax.first << ", "
-            << *minmax.second << "]\n"
-            << "Saved: "
-            << output_path << "\n";
+        const auto mm=std::minmax_element(output.begin(),output.end());
+        std::cout<<"Output range: ["<<*mm.first<<", "<<*mm.second<<"]\n";
+        std::cout<<"Saved: "<<output_path<<"\n";
 
         return EXIT_SUCCESS;
-    } catch (const std::exception& error) {
-        std::cerr
-            << "Error: "
-            << error.what()
-            << "\n";
-
+    } catch (const std::exception& e) {
+        std::cerr<<"Error: "<<e.what()<<"\n";
         return EXIT_FAILURE;
     }
 }

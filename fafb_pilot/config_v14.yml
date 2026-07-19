@@ -1,0 +1,102 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# FAFB real-data pilot — per-block training config, v14 (self-regulating N,
+# no hard ceiling doing the work)
+#
+# config_v13.yml capped max_gaussians at 5000 and got a real, sizeable fidelity
+# cost: N=4999, vol_PSNR=24.45 dB, vs. the original b_211/best.pth's 50,000
+# Gaussians / 40.47 dB. That confirmed the earlier diagnosis empirically: the
+# growth loop (split_and_clone) has no internal notion of "enough" -- it grows
+# on local gradient signal alone until it hits whatever ceiling max_gaussians
+# sets, so a small ceiling just caps fidelity along with N.
+#
+# v14 asks a different question: can prune and densification reach a natural
+# balance on their own, with max_gaussians left large (50000, matching the
+# original b_211 run) so the ceiling is NOT what stops growth? For that,
+# something has to inject a real cost of *redundancy* into the gradients the
+# growth loop reacts to -- v13's terms don't quite do that:
+#   - lambda_coverage / lambda_aniso reward large, elongated ellipsoids, which
+#     resists split's shrink-daughters mechanic, but say nothing about two
+#     Gaussians sitting on top of each other.
+#   - lambda_count / lambda_L1 pull weak/marginal Gaussians toward zero
+#     intensity, but a redundant *strong* Gaussian looks exactly as "alive" to
+#     both those terms and to prune_only()'s intensity-only check as a
+#     necessary one.
+#
+# lambda_overlap (_loss_term_overlap in _3dgs.py) is the piece that was
+# missing: a k-NN pairwise overlap penalty, weighted by both Gaussians'
+# intensity, using the closed-form Gaussian-product overlap integral. Two
+# genuinely co-located, similarly-sized Gaussians get penalised directly,
+# regardless of how "alive" either looks in isolation -- pushing the optimizer
+# to either separate them, shrink one toward zero (handing it to prune_only on
+# the next pass), or absorb one into the other. That is an actual cost of
+# density, evaluated independent of any ceiling.
+#
+# Kept from v13: uniform_sample_frac (off-grid supervision), lambda_coverage/
+# lambda_aniso/lambda_count/lambda_L1 (same reasoning as before), and the
+# raised prune_inten_thresh (so what these losses decay actually gets removed).
+#
+# This is a genuine experiment, not a guaranteed win: lambda_overlap has no
+# tuned weight anywhere in this project's history to start from (see its
+# docstring for why the naive random-pair version silently failed at realistic
+# N and had to be redone as k-NN). --overlap_n_query/--overlap_k_neighbors
+# control the k-NN search cost (O(n_query * N) per step); defaults are fine at
+# these Gaussian counts.
+#
+# Usage (single-block test):
+#   /venv/r3-ml/bin/python3 scripts/_3dgs/_3dgs.py \
+#     --config fafb_pilot/config_v14.yml \
+#     --volume data/fafb/blocks/image_z32_y31_x31.tif \
+#     --out    fafb_pilot/models/blocks_v14_test/b_211
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Runtime flags ───────────────────────────────────────────────────────────────
+use_kernel: true
+flat_out:   true
+swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init from
+no_wandb:   true
+
+# ── Gaussian cloud ──────────────────────────────────────────────────────────────
+n_init:        1000       # unchanged from v2/v12/v13
+max_gaussians: 50000      # back to v2's original ceiling -- NOT meant to bind;
+                          # lambda_overlap (below) is what should keep N down
+
+# ── Training schedule ────────────────────────────────────────────────────────────
+epochs:          500      # unchanged from v2/v12/v13
+steps_per_epoch: 50       # unchanged -- total steps = 25000
+
+# ── Densification (clone / split / prune) ─────────────────────────────────────
+densify_from_step:  500     # epoch 10  (unchanged from v2/v12/v13)
+densify_until_step: 20000   # epoch 400 (unchanged from v2/v12/v13)
+prune_inten_thresh: 0.01    # 10x default -- aggressive enough to actually
+                             # remove what these losses decay (matches v13)
+
+# ── Off-grid generalisation fix (unchanged from v12/v13) ────────────────────────
+uniform_sample_frac: 0.3
+
+# ── Coverage / anisotropy / count / redundancy regularisation ──────────────────
+lambda_coverage: 0.01        # rewards larger s_max -> fewer, bigger Gaussians
+lambda_aniso:    0.001       # collapses s_min -> elongated ellipsoids covering
+                             # more space per Gaussian, less redundant overlap
+lambda_count:    0.0001      # soft-L0 penalty -- pulls borderline Gaussians to extinction
+lambda_L1:       0.0001      # steady pull toward v_k=0 -- finishes off zombies
+lambda_overlap:  1.0         # NEW: k-NN pairwise overlap penalty -- direct cost
+                             # of two co-located, similarly-sized Gaussians,
+                             # independent of whether either looks "alive".
+                             # (0.001 AND 0.01 both hit N=50000 at the exact
+                             # same step (1800/epoch 36) -- a 10x change made
+                             # NO measurable difference, so this is a 100x jump
+                             # rather than another 10x increment.)
+scale_max_hard:  0.15        # NEW: hard ceiling on s_max (init_scale=0.05 x 3).
+                             # Without this, lambda_coverage's reward saturates
+                             # its *benefit* at s_max=1.0 but nothing stops actual
+                             # growth beyond that -- combined with lambda_aniso
+                             # collapsing s_min, that produced highly eccentric
+                             # covariances whose pairwise sums (in the overlap
+                             # term above) went numerically unstable and crashed
+                             # training with a NaN cascade at epoch ~150 in the
+                             # first attempt (see _loss_term_overlap's jitter fix
+                             # in _3dgs.py for the other half of that fix).
+
+# All other hyperparameters (LR schedule, densify_interval/grad_thresh/max_scale,
+# overlap_n_query/overlap_k_neighbors, remaining loss weights) are left at
+# scripts/_3dgs/_3dgs.py's argparse defaults.

@@ -361,7 +361,8 @@ __global__ void preprocess_gaussians_kernel(
     int image_height,
     int tiles_x,
     int tiles_y,
-    Camera camera)
+    Camera camera,
+    bool hard_gate)
 {
     const int gaussian_index =
         blockIdx.x * blockDim.x + threadIdx.x;
@@ -495,6 +496,35 @@ __global__ void preprocess_gaussians_kernel(
         maximum_tile_x = tiles_x;
         minimum_tile_y = 0;
         maximum_tile_y = tiles_y;
+
+        // Hard-gated multi-block scenes: the camera sits at the box centre,
+        // so a ray's world-space octant is fixed by its own direction sign
+        // for its whole length (see same_octant() and the hard-gating
+        // comments above render_gaussian_mip_kernel). With an axis-aligned
+        // camera (camera.right/up equal to two world axes -- true whenever
+        // this renderer is invoked with yaw=pitch=roll=0, its only actual
+        // use), camera_x/camera_y ARE the Gaussian's world X/Y coordinates,
+        // so only the matching screen half can ever reach it: restrict to
+        // that half here too, same as the normal-case branch below (pixel
+        // half-boundary, converted via the same /TILE_WIDTH,/TILE_HEIGHT
+        // truncation as everywhere else, rather than assuming tiles_x/y are
+        // even).
+        if (hard_gate) {
+            const int half_pixel_x = image_width / 2;
+            const int half_pixel_y = image_height / 2;
+            const int half_tile_x = half_pixel_x / TILE_WIDTH;
+            const int half_tile_y = half_pixel_y / TILE_HEIGHT;
+            if (camera_x < 0.0f) {
+                maximum_tile_x = min(maximum_tile_x, half_tile_x + 1);
+            } else {
+                minimum_tile_x = max(minimum_tile_x, half_tile_x);
+            }
+            if (camera_y >= 0.0f) {
+                maximum_tile_y = min(maximum_tile_y, half_tile_y + 1);
+            } else {
+                minimum_tile_y = max(minimum_tile_y, half_tile_y);
+            }
+        }
     }
     else {
         // Conservative perspective bounds for the containing sphere.
@@ -562,14 +592,36 @@ __global__ void preprocess_gaussians_kernel(
         const float maximum_pixel_y_float =
             (0.5f - minimum_ndc_y * 0.5f) * float(image_height);
 
-        const int minimum_pixel_x =
+        int minimum_pixel_x =
             int(floorf(minimum_pixel_x_float)) - 1;
-        const int maximum_pixel_x =
+        int maximum_pixel_x =
             int(ceilf(maximum_pixel_x_float)) + 1;
-        const int minimum_pixel_y =
+        int minimum_pixel_y =
             int(floorf(minimum_pixel_y_float)) - 1;
-        const int maximum_pixel_y =
+        int maximum_pixel_y =
             int(ceilf(maximum_pixel_y_float)) + 1;
+
+        // Hard-gated multi-block scenes: restrict to the screen half that
+        // can actually reach this Gaussian's own world-space X/Y octant --
+        // see the identical comment on the near-plane-straddle branch above
+        // for the full reasoning. This is what turns "stage every candidate
+        // Gaussian from all blocks, then discard 7/8 of them per sample"
+        // into "only stage Gaussians whose octant this tile's rays can
+        // reach in the first place."
+        if (hard_gate) {
+            const int half_pixel_x = image_width / 2;
+            const int half_pixel_y = image_height / 2;
+            if (camera_x < 0.0f) {
+                maximum_pixel_x = min(maximum_pixel_x, half_pixel_x);
+            } else {
+                minimum_pixel_x = max(minimum_pixel_x, half_pixel_x);
+            }
+            if (camera_y >= 0.0f) {
+                maximum_pixel_y = min(maximum_pixel_y, half_pixel_y);
+            } else {
+                minimum_pixel_y = max(minimum_pixel_y, half_pixel_y);
+            }
+        }
 
         // Reject the Gaussian if the full projected bound misses the image.
         const bool overlaps_image =
@@ -827,6 +879,21 @@ __device__ inline float gaussian_value_at_point(
 // Gaussians are copied to shared memory in small batches.
 // ============================================================================
 
+// Hard position gating for multi-block stitched scenes: a Gaussian only
+// contributes to a sample point if both lie in the same octant relative to
+// the box centre (matching the [-1,0]/[0,1] per-axis convention used to
+// remap each block into the shared frame). Both inputs are continuous
+// floats (a Gaussian's fitted mean, a ray-marched sample position), never
+// snapped to a discrete grid, so an exact tie at 0.0 is a measure-zero event
+// -- unlike gating a discrete voxel-index grid (where the low octant's last
+// index and the high octant's first index collide at exactly 0.0), this is
+// safe without any extra bookkeeping.
+__device__ inline bool same_octant(float3 a, float3 b) {
+    return (a.x >= 0.0f) == (b.x >= 0.0f) &&
+           (a.y >= 0.0f) == (b.y >= 0.0f) &&
+           (a.z >= 0.0f) == (b.z >= 0.0f);
+}
+
 __global__ void render_gaussian_mip_kernel(
     const GaussianGPU* gaussians,
     const uint32_t* sorted_gaussian_indices,
@@ -837,7 +904,8 @@ __global__ void render_gaussian_mip_kernel(
     int tiles_x,
     int ray_sample_count,
     Camera camera,
-    AxisAlignedBox box)
+    AxisAlignedBox box,
+    bool hard_gate)
 {
     const int local_x = threadIdx.x;
     const int local_y = threadIdx.y;
@@ -961,6 +1029,12 @@ __global__ void render_gaussian_mip_kernel(
                 for (uint32_t batch_index = 0;
                      batch_index < batch_count;
                      ++batch_index) {
+                    if (hard_gate &&
+                        !same_octant(
+                            sample_point,
+                            shared_gaussians[batch_index].mean)) {
+                        continue;
+                    }
                     density_at_sample += gaussian_value_at_point(
                         shared_gaussians[batch_index],
                         sample_point);
@@ -1134,7 +1208,8 @@ public:
         int image_height,
         int ray_sample_count,
         Camera camera,
-        AxisAlignedBox box)
+        AxisAlignedBox box,
+        bool hard_gate = false)
         : gaussian_count_(int(host_gaussians.size())),
           image_width_(image_width),
           image_height_(image_height),
@@ -1143,7 +1218,8 @@ public:
           tiles_y_(divide_round_up(image_height, TILE_HEIGHT)),
           tile_count_(tiles_x_ * tiles_y_),
           camera_(camera),
-          box_(box)
+          box_(box),
+          hard_gate_(hard_gate)
     {
         CUDA_CHECK(cudaStreamCreateWithFlags(
             &stream_,
@@ -1221,7 +1297,8 @@ public:
             tiles_x_,
             ray_sample_count_,
             camera_,
-            box_);
+            box_,
+            hard_gate_);
 
         CUDA_CHECK(cudaGetLastError());
     }
@@ -1270,7 +1347,8 @@ private:
             image_height_,
             tiles_x_,
             tiles_y_,
-            camera_);
+            camera_,
+            hard_gate_);
 
         CUDA_CHECK(cudaGetLastError());
 
@@ -1414,6 +1492,7 @@ private:
 
     Camera camera_{};
     AxisAlignedBox box_{};
+    bool hard_gate_ = false;
 
     cudaStream_t stream_{};
 
@@ -1810,7 +1889,8 @@ static std::vector<float> benchmark_renderer(
 
 enum class RepresentationType {
     DenseVoxel,
-    PretrainedGaussian
+    PretrainedGaussian,
+    PretrainedGaussianHardGated
 };
 
 static RepresentationType parse_representation_type(const std::string& value) {
@@ -1822,9 +1902,14 @@ static RepresentationType parse_representation_type(const std::string& value) {
         return RepresentationType::PretrainedGaussian;
     }
 
+    if (value == "pretrained_gaussian_hard_gated") {
+        return RepresentationType::PretrainedGaussianHardGated;
+    }
+
     throw std::runtime_error(
         "Invalid representation type '" + value +
-        "'. Expected dense_voxel or pretrained_gaussian.");
+        "'. Expected dense_voxel, pretrained_gaussian, or "
+        "pretrained_gaussian_hard_gated.");
 }
 
 int main(int argument_count, char** arguments) {
@@ -1833,7 +1918,7 @@ int main(int argument_count, char** arguments) {
             std::cerr
                 << "Usage:\n  "
                 << arguments[0]
-                << " <dense_voxel|pretrained_gaussian>"
+                << " <dense_voxel|pretrained_gaussian|pretrained_gaussian_hard_gated>"
                 << " input.bin output.pfm"
                 << " width height ray_samples benchmark_frames"
                 << " yaw pitch roll fov_y"
@@ -1916,7 +2001,9 @@ int main(int argument_count, char** arguments) {
             << "Representation: "
             << (representation == RepresentationType::DenseVoxel
                     ? "dense_voxel"
-                    : "pretrained_gaussian")
+                    : representation == RepresentationType::PretrainedGaussian
+                        ? "pretrained_gaussian"
+                        : "pretrained_gaussian_hard_gated")
             << "\n"
             << "Output: " << image_width << " x " << image_height << "\n"
             << "Ray samples: " << ray_sample_count << "\n"
@@ -1975,13 +2062,18 @@ int main(int argument_count, char** arguments) {
 
             std::cout << "Gaussians: " << gaussians.size() << "\n";
 
+            const bool hard_gate =
+                representation ==
+                RepresentationType::PretrainedGaussianHardGated;
+
             GaussianMIPRenderer renderer(
                 gaussians,
                 image_width,
                 image_height,
                 ray_sample_count,
                 camera,
-                box);
+                box,
+                hard_gate);
 
             std::cout
                 << "Gaussian-tile pairs: "

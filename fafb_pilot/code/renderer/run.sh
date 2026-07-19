@@ -53,7 +53,7 @@ nvcc -O3 -std=c++17 --use_fast_math -lineinfo \
 
 /venv/r3-ml/bin/python3 "${EXPORTER}" \
   pretrained_gaussian \
-  /root/project/fafb_pilot/models/blocks_v16_test/b_211/best.pth \
+  /root/project/fafb_pilot/models/blocks_v18/b_211/best.pth \
   "${BIN_DIR}/gaussians.bin" \
   --means-key means \
   --scales-key log_scales \
@@ -85,16 +85,16 @@ nvcc -O3 -std=c++17 --use_fast_math -lineinfo \
 # Voxelized Gaussian reconstruction (fair comparison against GT)
 #
 # The raw pretrained_gaussian path above ray-marches the continuous,
-# unbounded Gaussian-sum field, which can expose overfitting between
-# training-grid points (sparse/oversaturated MIP, poor correlation with GT).
+# Unbounded Gaussian-sum field, which can expose overfitting between
+# Training-grid points (sparse/oversaturated MIP, poor correlation with GT).
 # This path instead evaluates the same checkpoint on the exact training
-# voxel grid, clamps to [0,1], and renders it through the SAME bounded
-# dense_voxel MIP path used for GT above -- an apples-to-apples comparison.
+# Voxel grid, clamps to [0,1], and renders it through the SAME bounded
+# Dense_voxel MIP path used for GT above -- an apples-to-apples comparison.
 # ----------------------------------------------------------------------
 
 /venv/r3-ml/bin/python3 "${EXPORTER}" \
   voxelized_gaussian \
-  /root/project/fafb_pilot/models/blocks_v16_test/b_211/best.pth \
+  /root/project/fafb_pilot/models/blocks_v18/b_211/best.pth \
   "${BIN_DIR}/voxelized_gaussian.bin" \
   --means-key means \
   --scales-key log_scales \

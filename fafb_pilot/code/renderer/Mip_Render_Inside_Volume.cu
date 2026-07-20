@@ -162,8 +162,17 @@ struct GaussianGPU {
 
     float amplitude;
 
+    // Conservative bounding-sphere radius (world units) -- sqrt(MAHALANOBIS_CUTOFF
+    // * largest covariance eigenvalue). Only populated/used by the rasterization
+    // path (build_gaussian_gpu_kernel / rasterize_gaussians_mip_kernel), which
+    // has no tile list and so re-derives its own screen footprint per Gaussian
+    // directly from this, instead of from tile_min/tile_max below.
+    float support_radius;
+
     // Half-open tile rectangle:
     // [tile_min.x, tile_max.x) x [tile_min.y, tile_max.y)
+    // Only populated/used by the tile-based ray-marching path
+    // (preprocess_gaussians_kernel / render_gaussian_mip_kernel).
     int2 tile_min;
     int2 tile_max;
 
@@ -362,7 +371,8 @@ __global__ void preprocess_gaussians_kernel(
     int tiles_x,
     int tiles_y,
     Camera camera,
-    bool hard_gate)
+    bool hard_gate,
+    int n_per_axis)
 {
     const int gaussian_index =
         blockIdx.x * blockDim.x + threadIdx.x;
@@ -498,18 +508,30 @@ __global__ void preprocess_gaussians_kernel(
         maximum_tile_y = tiles_y;
 
         // Hard-gated multi-block scenes: the camera sits at the box centre,
-        // so a ray's world-space octant is fixed by its own direction sign
-        // for its whole length (see same_octant() and the hard-gating
-        // comments above render_gaussian_mip_kernel). With an axis-aligned
-        // camera (camera.right/up equal to two world axes -- true whenever
-        // this renderer is invoked with yaw=pitch=roll=0, its only actual
-        // use), camera_x/camera_y ARE the Gaussian's world X/Y coordinates,
-        // so only the matching screen half can ever reach it: restrict to
-        // that half here too, same as the normal-case branch below (pixel
-        // half-boundary, converted via the same /TILE_WIDTH,/TILE_HEIGHT
+        // so a ray's world-space HALF is fixed by its own direction sign for
+        // its whole length. With an axis-aligned camera (camera.right/up
+        // equal to two world axes -- true whenever this renderer is invoked
+        // with yaw=pitch=roll=0, its only actual use), camera_x/camera_y ARE
+        // the Gaussian's world X/Y coordinates, so only the matching screen
+        // half can ever reach it: restrict to that half here too, same as
+        // the normal-case branch below (pixel half-boundary, converted via
+        // the same /TILE_WIDTH,/TILE_HEIGHT
         // truncation as everywhere else, rather than assuming tiles_x/y are
         // even).
-        if (hard_gate) {
+        //
+        // This restriction is only VALID when n_per_axis is even: same_cell()
+        // partitions each axis into n_per_axis cells, and the sign boundary
+        // (coordinate 0) coincides with a cell boundary only for even
+        // n_per_axis (half the cells strictly negative, half strictly
+        // non-negative). For odd n_per_axis (n_per_axis=1, the trivial
+        // single-block case, being the only one this renderer is ever
+        // invoked with) the cell straddling 0 covers BOTH signs, so a
+        // Gaussian on one side can legitimately match a sample point on the
+        // other -- restricting by sign there would wrongly cull half of every
+        // Gaussian's true screen footprint (visible as a sharp brightness
+        // seam straight through the image centre). Skip the restriction
+        // whenever it wouldn't be sound.
+        if (hard_gate && (n_per_axis % 2 == 0)) {
             const int half_pixel_x = image_width / 2;
             const int half_pixel_y = image_height / 2;
             const int half_tile_x = half_pixel_x / TILE_WIDTH;
@@ -602,13 +624,16 @@ __global__ void preprocess_gaussians_kernel(
             int(ceilf(maximum_pixel_y_float)) + 1;
 
         // Hard-gated multi-block scenes: restrict to the screen half that
-        // can actually reach this Gaussian's own world-space X/Y octant --
+        // can actually reach this Gaussian's own world-space X/Y sign --
         // see the identical comment on the near-plane-straddle branch above
-        // for the full reasoning. This is what turns "stage every candidate
-        // Gaussian from all blocks, then discard 7/8 of them per sample"
-        // into "only stage Gaussians whose octant this tile's rays can
-        // reach in the first place."
-        if (hard_gate) {
+        // for the full reasoning, INCLUDING why this is only valid for even
+        // n_per_axis. This cuts candidate Gaussians by roughly half (a ray's
+        // screen half is fixed by direction sign alone); it does NOT further
+        // restrict by cell, since a ray can still cross every cell along its
+        // own depth within its half -- same_cell() in
+        // render_gaussian_mip_kernel is what applies the full per-cell gate,
+        // at the per-sample-point evaluation stage.
+        if (hard_gate && (n_per_axis % 2 == 0)) {
             const int half_pixel_x = image_width / 2;
             const int half_pixel_y = image_height / 2;
             if (camera_x < 0.0f) {
@@ -869,6 +894,124 @@ __device__ inline float gaussian_value_at_point(
 }
 
 // ============================================================================
+// 10b. Closed-form peak density along a ray (rasterization path only)
+// ============================================================================
+//
+// The ray-marching path above (gaussian_value_at_point, used by
+// render_gaussian_mip_kernel) approximates "the largest density a Gaussian
+// reaches along this ray" by sampling ray_sample_count fixed points and
+// keeping the largest. For a single Gaussian that maximum has a closed
+// form: along x(t) = ray_origin + t*ray_direction, the Mahalanobis exponent
+// Q(t) = (x(t)-mean)^T Sigma^{-1} (x(t)-mean) is a QUADRATIC in t (since
+// x(t)-mean is affine in t), so its minimum -- the point of peak density --
+// can be solved directly, with no sampling and no risk of stepping over a
+// thin peak between samples.
+//
+// This is what makes true rasterization (rasterize_gaussians_mip_kernel
+// below) possible: instead of every pixel repeatedly re-evaluating every
+// candidate Gaussian at every one of ray_sample_count depths, every
+// Gaussian computes its own single peak location directly and scatters
+// once into the pixels its support sphere projects onto.
+
+__device__ inline float symmetric_bilinear_form(
+    const GaussianGPU& gaussian,
+    float3 u,
+    float3 v)
+{
+    return gaussian.q00 * u.x * v.x +
+           gaussian.q01 * (u.x * v.y + u.y * v.x) +
+           gaussian.q02 * (u.x * v.z + u.z * v.x) +
+           gaussian.q11 * u.y * v.y +
+           gaussian.q12 * (u.y * v.z + u.z * v.y) +
+           gaussian.q22 * u.z * v.z;
+}
+
+// Finds the point along [t_min, t_max] where `gaussian` is brightest, and
+// its density there. Returns false if that peak is below the Mahalanobis
+// cutoff (i.e. this Gaussian contributes nothing anywhere on the segment).
+//
+// Q(t) = a*t^2 + b*t + c is convex (a = ray_direction^T Sigma^{-1}
+// ray_direction > 0 for any valid inverse covariance and nonzero
+// direction), so its constrained minimum over [t_min, t_max] is simply the
+// unconstrained minimum -b/(2a) clamped into that range -- a standard
+// property of convex quadratics, avoiding a boundary search.
+__device__ inline bool solve_gaussian_ray_peak(
+    const GaussianGPU& gaussian,
+    float3 ray_origin,
+    float3 ray_direction,
+    float t_min,
+    float t_max,
+    float& density,
+    float3& peak_point)
+{
+    const float3 relative_origin = subtract(ray_origin, gaussian.mean);
+
+    const float a = symmetric_bilinear_form(gaussian, ray_direction, ray_direction);
+    const float b = 2.0f * symmetric_bilinear_form(gaussian, ray_direction, relative_origin);
+    const float c = symmetric_bilinear_form(gaussian, relative_origin, relative_origin);
+
+    if (!(a > 1.0e-12f)) {
+        return false;
+    }
+
+    float t_star = -b / (2.0f * a);
+    t_star = fminf(fmaxf(t_star, t_min), t_max);
+
+    const float mahalanobis_distance = a * t_star * t_star + b * t_star + c;
+
+    if (mahalanobis_distance < 0.0f || mahalanobis_distance > MAHALANOBIS_CUTOFF) {
+        return false;
+    }
+
+    density = gaussian.amplitude * __expf(-0.5f * mahalanobis_distance);
+    peak_point = add(ray_origin, multiply(ray_direction, t_star));
+    return true;
+}
+
+// Where along [t_min, t_max] does `gaussian` clear the Mahalanobis cutoff at
+// all? Q(t) = a*t^2 + b*t + c <= MAHALANOBIS_CUTOFF is a quadratic
+// inequality; solving a*t^2 + b*t + (c - CUTOFF) = 0 gives the two t values
+// where the Gaussian's support boundary crosses the ray (if the
+// discriminant is negative, the ray never enters the support at all).
+// Used by rasterize_gaussians_binned_kernel below to know exactly which
+// depth bins a Gaussian can possibly contribute to, instead of touching
+// every bin along the ray.
+__device__ inline bool solve_gaussian_ray_interval(
+    const GaussianGPU& gaussian,
+    float3 ray_origin,
+    float3 ray_direction,
+    float t_min,
+    float t_max,
+    float& interval_lo,
+    float& interval_hi)
+{
+    const float3 relative_origin = subtract(ray_origin, gaussian.mean);
+
+    const float a = symmetric_bilinear_form(gaussian, ray_direction, ray_direction);
+    const float b = 2.0f * symmetric_bilinear_form(gaussian, ray_direction, relative_origin);
+    const float c = symmetric_bilinear_form(gaussian, relative_origin, relative_origin);
+
+    if (!(a > 1.0e-12f)) {
+        return false;
+    }
+
+    const float discriminant = b * b - 4.0f * a * (c - MAHALANOBIS_CUTOFF);
+
+    if (discriminant < 0.0f) {
+        return false; // Ray never comes within the cutoff distance at all.
+    }
+
+    const float sqrt_discriminant = sqrtf(discriminant);
+    const float root_lo = (-b - sqrt_discriminant) / (2.0f * a);
+    const float root_hi = (-b + sqrt_discriminant) / (2.0f * a);
+
+    interval_lo = fmaxf(root_lo, t_min);
+    interval_hi = fminf(root_hi, t_max);
+
+    return interval_hi > interval_lo;
+}
+
+// ============================================================================
 // 11. Main rendering kernel
 // ============================================================================
 //
@@ -880,18 +1023,29 @@ __device__ inline float gaussian_value_at_point(
 // ============================================================================
 
 // Hard position gating for multi-block stitched scenes: a Gaussian only
-// contributes to a sample point if both lie in the same octant relative to
-// the box centre (matching the [-1,0]/[0,1] per-axis convention used to
-// remap each block into the shared frame). Both inputs are continuous
-// floats (a Gaussian's fitted mean, a ray-marched sample position), never
-// snapped to a discrete grid, so an exact tie at 0.0 is a measure-zero event
-// -- unlike gating a discrete voxel-index grid (where the low octant's last
-// index and the high octant's first index collide at exactly 0.0), this is
-// safe without any extra bookkeeping.
-__device__ inline bool same_octant(float3 a, float3 b) {
-    return (a.x >= 0.0f) == (b.x >= 0.0f) &&
-           (a.y >= 0.0f) == (b.y >= 0.0f) &&
-           (a.z >= 0.0f) == (b.z >= 0.0f);
+// contributes to a sample point if both lie in the same per-axis CELL
+// relative to the box centre, generalising the [-1,0]/[0,1] two-block
+// convention to n_per_axis blocks per axis (matching
+// stitch_blocks.py's combined_range(): block index i along an axis owns
+// [-1 + i*(2/n), -1 + (i+1)*(2/n)]). cell_index() computes that same index
+// from a continuous coordinate. n_per_axis=2 recovers the original sign-only
+// same_octant() test exactly (cell 0 = negative half, cell 1 = non-negative
+// half). Both inputs are continuous floats (a Gaussian's fitted mean, a
+// ray-marched sample position), never snapped to a discrete grid, so an
+// exact tie at a cell boundary is a measure-zero event -- unlike gating a
+// discrete voxel-index grid (where the low block's last index and the high
+// block's first index collide at exactly the same coordinate), this is safe
+// without any extra bookkeeping.
+__device__ inline int cell_index(float coordinate, int n_per_axis) {
+    int index = int(floorf((coordinate + 1.0f) * 0.5f * float(n_per_axis)));
+    index = max(0, min(n_per_axis - 1, index));
+    return index;
+}
+
+__device__ inline bool same_cell(float3 a, float3 b, int n_per_axis) {
+    return cell_index(a.x, n_per_axis) == cell_index(b.x, n_per_axis) &&
+           cell_index(a.y, n_per_axis) == cell_index(b.y, n_per_axis) &&
+           cell_index(a.z, n_per_axis) == cell_index(b.z, n_per_axis);
 }
 
 __global__ void render_gaussian_mip_kernel(
@@ -905,7 +1059,8 @@ __global__ void render_gaussian_mip_kernel(
     int ray_sample_count,
     Camera camera,
     AxisAlignedBox box,
-    bool hard_gate)
+    bool hard_gate,
+    int n_per_axis)
 {
     const int local_x = threadIdx.x;
     const int local_y = threadIdx.y;
@@ -1030,9 +1185,10 @@ __global__ void render_gaussian_mip_kernel(
                      batch_index < batch_count;
                      ++batch_index) {
                     if (hard_gate &&
-                        !same_octant(
+                        !same_cell(
                             sample_point,
-                            shared_gaussians[batch_index].mean)) {
+                            shared_gaussians[batch_index].mean,
+                            n_per_axis)) {
                         continue;
                     }
                     density_at_sample += gaussian_value_at_point(
@@ -1209,7 +1365,8 @@ public:
         int ray_sample_count,
         Camera camera,
         AxisAlignedBox box,
-        bool hard_gate = false)
+        bool hard_gate = false,
+        int n_per_axis = 2)
         : gaussian_count_(int(host_gaussians.size())),
           image_width_(image_width),
           image_height_(image_height),
@@ -1219,7 +1376,8 @@ public:
           tile_count_(tiles_x_ * tiles_y_),
           camera_(camera),
           box_(box),
-          hard_gate_(hard_gate)
+          hard_gate_(hard_gate),
+          n_per_axis_(n_per_axis)
     {
         CUDA_CHECK(cudaStreamCreateWithFlags(
             &stream_,
@@ -1298,7 +1456,8 @@ public:
             ray_sample_count_,
             camera_,
             box_,
-            hard_gate_);
+            hard_gate_,
+            n_per_axis_);
 
         CUDA_CHECK(cudaGetLastError());
     }
@@ -1348,7 +1507,8 @@ private:
             tiles_x_,
             tiles_y_,
             camera_,
-            hard_gate_);
+            hard_gate_,
+            n_per_axis_);
 
         CUDA_CHECK(cudaGetLastError());
 
@@ -1493,6 +1653,7 @@ private:
     Camera camera_{};
     AxisAlignedBox box_{};
     bool hard_gate_ = false;
+    int n_per_axis_ = 2;
 
     cudaStream_t stream_{};
 
@@ -1513,6 +1674,468 @@ private:
 
     void* device_scan_workspace_ = nullptr;
     void* device_sort_workspace_ = nullptr;
+};
+
+// ============================================================================
+// 14b. Gaussian RASTERIZATION path (no ray sampling)
+// ============================================================================
+//
+// GaussianMIPRenderer above is a RAY MARCHER: every pixel repeatedly re-tests
+// every candidate Gaussian at ray_sample_count fixed depths. This path
+// inverts that: it launches one thread per GAUSSIAN, which projects itself
+// onto the screen once and scatters directly into every pixel its support
+// sphere covers -- the standard rasterization structure real-time 3D
+// Gaussian Splatting renderers use, adapted here for Maximum Intensity
+// Projection instead of alpha compositing.
+//
+// CORRECTNESS: an earlier version of this path combined each Gaussian's own
+// independent peak (solve_gaussian_ray_peak) with atomicMax across
+// Gaussians -- i.e. max_i[max_t f_i(x(t))]. That is NOT the same quantity as
+// true MIP-of-a-sum, max_t[sum_i f_i(x(t))], and measurably underestimated
+// density wherever Gaussians overlap (common in densely cloned/split
+// regions) -- verified empirically to be a large, not marginal, gap against
+// both the ray-marched output and the bounded dense_voxel reference.
+//
+// This version fixes that by discretising each ray's valid depth range into
+// a small number of bins (--ray-samples-as-bin-count, i.e. the existing
+// ray_sample_count argument, now reused as bin count instead of being
+// ignored) and having every Gaussian ATOMICALLY ADD its contribution into
+// every bin its support actually overlaps (solve_gaussian_ray_interval finds
+// that bin range directly, so a narrow Gaussian only touches a couple of
+// bins, not all of them). Within a bin, multiple Gaussians correctly SUM
+// (matching what ray marching itself does at each sample depth); the final
+// image takes the max across bins per pixel (reduce_bins_to_image_kernel) --
+// mathematically the same operation as ray marching, just computed by
+// scattering from Gaussians into their own footprint instead of gathering
+// candidates at every pixel, which is what makes it fast.
+// ============================================================================
+
+// Camera-independent: builds each Gaussian's covariance/inverse-covariance/
+// amplitude/support-radius exactly once, regardless of camera position --
+// unlike preprocess_gaussians_kernel, this never needs to be re-run just
+// because the camera moved (mirrors real 3DGS's separation between a
+// Gaussian's own parameters and its current screen projection).
+__global__ void build_gaussian_gpu_kernel(
+    const GaussianDisk* input_gaussians,
+    GaussianGPU* output_gaussians,
+    int gaussian_count)
+{
+    const int gaussian_index = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (gaussian_index >= gaussian_count) {
+        return;
+    }
+
+    const GaussianDisk input = input_gaussians[gaussian_index];
+
+    GaussianGPU gaussian{};
+    gaussian.mean = make_float3(input.mean[0], input.mean[1], input.mean[2]);
+    gaussian.amplitude = fmaxf(input.amplitude, 0.0f);
+    gaussian.tile_min = make_int2(0, 0);
+    gaussian.tile_max = make_int2(0, 0);
+
+    const float scale_x = fmaxf(fabsf(input.scale[0]), MINIMUM_SCALE);
+    const float scale_y = fmaxf(fabsf(input.scale[1]), MINIMUM_SCALE);
+    const float scale_z = fmaxf(fabsf(input.scale[2]), MINIMUM_SCALE);
+
+    float rotation[9];
+    quaternion_to_rotation_matrix(
+        input.quaternion[0],
+        input.quaternion[1],
+        input.quaternion[2],
+        input.quaternion[3],
+        rotation);
+
+    const float variance_x = scale_x * scale_x;
+    const float variance_y = scale_y * scale_y;
+    const float variance_z = scale_z * scale_z;
+
+    const float covariance00 =
+        rotation[0] * rotation[0] * variance_x +
+        rotation[1] * rotation[1] * variance_y +
+        rotation[2] * rotation[2] * variance_z;
+    const float covariance01 =
+        rotation[0] * rotation[3] * variance_x +
+        rotation[1] * rotation[4] * variance_y +
+        rotation[2] * rotation[5] * variance_z;
+    const float covariance02 =
+        rotation[0] * rotation[6] * variance_x +
+        rotation[1] * rotation[7] * variance_y +
+        rotation[2] * rotation[8] * variance_z;
+    const float covariance11 =
+        rotation[3] * rotation[3] * variance_x +
+        rotation[4] * rotation[4] * variance_y +
+        rotation[5] * rotation[5] * variance_z;
+    const float covariance12 =
+        rotation[3] * rotation[6] * variance_x +
+        rotation[4] * rotation[7] * variance_y +
+        rotation[5] * rotation[8] * variance_z;
+    const float covariance22 =
+        rotation[6] * rotation[6] * variance_x +
+        rotation[7] * rotation[7] * variance_y +
+        rotation[8] * rotation[8] * variance_z;
+
+    const bool inverse_is_valid = invert_symmetric_3x3(
+        covariance00, covariance01, covariance02,
+        covariance11, covariance12, covariance22,
+        gaussian.q00, gaussian.q01, gaussian.q02,
+        gaussian.q11, gaussian.q12, gaussian.q22);
+
+    if (!inverse_is_valid ||
+        gaussian.amplitude <= 0.0f ||
+        !isfinite(gaussian.amplitude)) {
+        gaussian.visible = 0;
+        gaussian.support_radius = 0.0f;
+        output_gaussians[gaussian_index] = gaussian;
+        return;
+    }
+
+    const float maximum_eigenvalue_bound = fmaxf(
+        largest_eigenvalue_upper_bound(
+            covariance00, covariance01, covariance02,
+            covariance11, covariance12, covariance22),
+        0.0f);
+
+    gaussian.support_radius = sqrtf(MAHALANOBIS_CUTOFF * maximum_eigenvalue_bound);
+    gaussian.visible = 1;
+    output_gaussians[gaussian_index] = gaussian;
+}
+
+// One thread per Gaussian. Projects its own support sphere onto the screen
+// (identical projection math to preprocess_gaussians_kernel's normal-case
+// branch, just without tile granularity -- there is no tile list in this
+// path), then for every pixel in that footprint finds exactly which depth
+// bins it overlaps (solve_gaussian_ray_interval) and ATOMICALLY ADDS its
+// density into just those bins of that pixel's bin_accum row -- correctly
+// summing with every other Gaussian that lands in the same bin, unlike an
+// atomic max across independent Gaussians (see section header above).
+__global__ void rasterize_gaussians_binned_kernel(
+    const GaussianGPU* gaussians,
+    int gaussian_count,
+    int image_width,
+    int image_height,
+    int num_bins,
+    Camera camera,
+    AxisAlignedBox box,
+    bool hard_gate,
+    int n_per_axis,
+    float* bin_accum)
+{
+    const int gaussian_index = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (gaussian_index >= gaussian_count) {
+        return;
+    }
+
+    const GaussianGPU gaussian = gaussians[gaussian_index];
+
+    if (!gaussian.visible) {
+        return;
+    }
+
+    const float3 relative_to_camera = subtract(gaussian.mean, camera.position);
+    const float camera_x = dot(relative_to_camera, camera.right);
+    const float camera_y = dot(relative_to_camera, camera.up);
+    const float camera_z = dot(relative_to_camera, camera.forward);
+
+    if (camera_z + gaussian.support_radius <= CAMERA_NEAR_DISTANCE) {
+        return; // Entirely behind the camera.
+    }
+
+    int minimum_pixel_x, maximum_pixel_x, minimum_pixel_y, maximum_pixel_y;
+
+    if (camera_z - gaussian.support_radius <= CAMERA_NEAR_DISTANCE) {
+        // Support sphere straddles the near plane: the projection below
+        // isn't reliable here, so fall back to the whole image rather than
+        // risk silently dropping a Gaussian close to the camera (mirrors
+        // preprocess_gaussians_kernel's identical near-plane fallback).
+        minimum_pixel_x = 0;
+        maximum_pixel_x = image_width;
+        minimum_pixel_y = 0;
+        maximum_pixel_y = image_height;
+    }
+    else {
+        const float nearest_z = fmaxf(camera_z - gaussian.support_radius, CAMERA_NEAR_DISTANCE);
+        const float farthest_z = fmaxf(camera_z + gaussian.support_radius, CAMERA_NEAR_DISTANCE);
+
+        const float horizontal_denominator_near = nearest_z * camera.tangent_half_vertical_fov * camera.aspect_ratio;
+        const float horizontal_denominator_far = farthest_z * camera.tangent_half_vertical_fov * camera.aspect_ratio;
+        const float vertical_denominator_near = nearest_z * camera.tangent_half_vertical_fov;
+        const float vertical_denominator_far = farthest_z * camera.tangent_half_vertical_fov;
+
+        const float x_offset_low = camera_x - gaussian.support_radius;
+        const float x_offset_high = camera_x + gaussian.support_radius;
+        const float y_offset_low = camera_y - gaussian.support_radius;
+        const float y_offset_high = camera_y + gaussian.support_radius;
+
+        const float minimum_ndc_x = fminf(
+            fminf(x_offset_low / horizontal_denominator_near, x_offset_low / horizontal_denominator_far),
+            fminf(x_offset_high / horizontal_denominator_near, x_offset_high / horizontal_denominator_far));
+        const float maximum_ndc_x = fmaxf(
+            fmaxf(x_offset_low / horizontal_denominator_near, x_offset_low / horizontal_denominator_far),
+            fmaxf(x_offset_high / horizontal_denominator_near, x_offset_high / horizontal_denominator_far));
+        const float minimum_ndc_y = fminf(
+            fminf(y_offset_low / vertical_denominator_near, y_offset_low / vertical_denominator_far),
+            fminf(y_offset_high / vertical_denominator_near, y_offset_high / vertical_denominator_far));
+        const float maximum_ndc_y = fmaxf(
+            fmaxf(y_offset_low / vertical_denominator_near, y_offset_low / vertical_denominator_far),
+            fmaxf(y_offset_high / vertical_denominator_near, y_offset_high / vertical_denominator_far));
+
+        minimum_pixel_x = max(0, int(floorf((minimum_ndc_x * 0.5f + 0.5f) * float(image_width))) - 1);
+        maximum_pixel_x = min(image_width, int(ceilf((maximum_ndc_x * 0.5f + 0.5f) * float(image_width))) + 1);
+        minimum_pixel_y = max(0, int(floorf((0.5f - maximum_ndc_y * 0.5f) * float(image_height))) - 1);
+        maximum_pixel_y = min(image_height, int(ceilf((0.5f - minimum_ndc_y * 0.5f) * float(image_height))) + 1);
+    }
+
+    for (int pixel_y = minimum_pixel_y; pixel_y < maximum_pixel_y; ++pixel_y) {
+        for (int pixel_x = minimum_pixel_x; pixel_x < maximum_pixel_x; ++pixel_x) {
+            const float ndc_x = 2.0f * (float(pixel_x) + 0.5f) / float(image_width) - 1.0f;
+            const float ndc_y = 1.0f - 2.0f * (float(pixel_y) + 0.5f) / float(image_height);
+
+            const float camera_plane_x = ndc_x * camera.aspect_ratio * camera.tangent_half_vertical_fov;
+            const float camera_plane_y = ndc_y * camera.tangent_half_vertical_fov;
+
+            const float3 ray_direction = normalize(add(
+                camera.forward,
+                add(
+                    multiply(camera.right, camera_plane_x),
+                    multiply(camera.up, camera_plane_y))));
+
+            float ray_entry_distance = 0.0f;
+            float ray_exit_distance = 0.0f;
+
+            if (!intersect_ray_with_box(camera.position, ray_direction, box, ray_entry_distance, ray_exit_distance)) {
+                continue;
+            }
+
+            ray_entry_distance = fmaxf(ray_entry_distance, CAMERA_NEAR_DISTANCE);
+
+            if (ray_exit_distance <= ray_entry_distance) {
+                continue;
+            }
+
+            // Which depth bins (of num_bins equal slices of
+            // [ray_entry_distance, ray_exit_distance]) does this Gaussian's
+            // support actually reach on THIS ray? Narrow Gaussians touch
+            // only one or two bins, not all of them.
+            float interval_lo = 0.0f;
+            float interval_hi = 0.0f;
+
+            if (!solve_gaussian_ray_interval(
+                    gaussian, camera.position, ray_direction,
+                    ray_entry_distance, ray_exit_distance,
+                    interval_lo, interval_hi)) {
+                continue;
+            }
+
+            const float bin_width = (ray_exit_distance - ray_entry_distance) / float(num_bins);
+            const int bin_lo = max(0, int(floorf((interval_lo - ray_entry_distance) / bin_width)));
+            const int bin_hi = min(num_bins - 1, int(floorf((interval_hi - ray_entry_distance) / bin_width)));
+
+            const int pixel_index = pixel_y * image_width + pixel_x;
+
+            for (int bin_index = bin_lo; bin_index <= bin_hi; ++bin_index) {
+                const float bin_center_t =
+                    ray_entry_distance + (float(bin_index) + 0.5f) * bin_width;
+
+                const float3 bin_center_point =
+                    add(camera.position, multiply(ray_direction, bin_center_t));
+
+                if (hard_gate && !same_cell(bin_center_point, gaussian.mean, n_per_axis)) {
+                    continue;
+                }
+
+                const float density = gaussian_value_at_point(gaussian, bin_center_point);
+
+                if (density <= 0.0f) {
+                    continue;
+                }
+
+                atomicAdd(&bin_accum[pixel_index * num_bins + bin_index], density);
+            }
+        }
+    }
+}
+
+// One thread per pixel: MIP is the max across that pixel's num_bins
+// depth-summed values -- mathematically the same reduction
+// render_gaussian_mip_kernel does per-sample, just after Gaussian-driven
+// scattering has already filled in the bins instead of pixel-driven
+// gathering.
+__global__ void reduce_bins_to_image_kernel(
+    const float* bin_accum,
+    float* output_image,
+    int pixel_count,
+    int num_bins)
+{
+    const int pixel_index = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (pixel_index >= pixel_count) {
+        return;
+    }
+
+    float maximum_density = 0.0f;
+
+    for (int bin_index = 0; bin_index < num_bins; ++bin_index) {
+        // NOTE: clamping here vs. clamping the final maximum once are
+        // mathematically IDENTICAL (min(x,1) is monotonic, and max commutes
+        // with any monotonic function: max_i(min(x_i,1)) == min(max_i(x_i),1)).
+        // Per-bin clamping was tried as a fix for the per-block brightness
+        // bias seen in the raw render and empirically produced byte-identical
+        // output to the final-only clamp -- confirming it cannot be the fix,
+        // since the bias is not a saturation/overflow effect (values pinned
+        // at the 1.0 ceiling); it is a genuine, moderate, sub-1.0 difference
+        // in what density each independently-trained block's Gaussians sum to
+        // at a given true-tissue brightness, which no clamp placement changes.
+        // Kept as max-then-clamp (equivalent, one comparison instead of two).
+        maximum_density = fmaxf(maximum_density, bin_accum[pixel_index * num_bins + bin_index]);
+    }
+    maximum_density = fminf(fmaxf(maximum_density, 0.0f), 1.0f);
+
+    output_image[pixel_index] = maximum_density;
+}
+
+class GaussianRasterMIPRenderer {
+public:
+    GaussianRasterMIPRenderer(
+        const std::vector<GaussianDisk>& host_gaussians,
+        int image_width,
+        int image_height,
+        int num_bins,
+        Camera camera,
+        AxisAlignedBox box,
+        bool hard_gate = false,
+        int n_per_axis = 2)
+        : gaussian_count_(int(host_gaussians.size())),
+          image_width_(image_width),
+          image_height_(image_height),
+          num_bins_(num_bins),
+          camera_(camera),
+          box_(box),
+          hard_gate_(hard_gate),
+          n_per_axis_(n_per_axis)
+    {
+        CUDA_CHECK(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+
+        CUDA_CHECK(cudaMalloc(
+            &device_input_gaussians_,
+            size_t(gaussian_count_) * sizeof(GaussianDisk)));
+        CUDA_CHECK(cudaMalloc(
+            &device_gaussians_,
+            size_t(gaussian_count_) * sizeof(GaussianGPU)));
+        CUDA_CHECK(cudaMalloc(
+            &device_output_image_,
+            size_t(image_width_) * size_t(image_height_) * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(
+            &device_bin_accum_,
+            size_t(image_width_) * size_t(image_height_) * size_t(num_bins_) * sizeof(float)));
+
+        CUDA_CHECK(cudaMemcpyAsync(
+            device_input_gaussians_,
+            host_gaussians.data(),
+            size_t(gaussian_count_) * sizeof(GaussianDisk),
+            cudaMemcpyHostToDevice,
+            stream_));
+
+        const int build_threads = 256;
+        const int build_blocks = divide_round_up(gaussian_count_, build_threads);
+
+        build_gaussian_gpu_kernel<<<build_blocks, build_threads, 0, stream_>>>(
+            device_input_gaussians_,
+            device_gaussians_,
+            gaussian_count_);
+
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    ~GaussianRasterMIPRenderer() {
+        cudaFree(device_input_gaussians_);
+        cudaFree(device_gaussians_);
+        cudaFree(device_output_image_);
+        cudaFree(device_bin_accum_);
+
+        if (stream_) {
+            cudaStreamDestroy(stream_);
+        }
+    }
+
+    GaussianRasterMIPRenderer(const GaussianRasterMIPRenderer&) = delete;
+    GaussianRasterMIPRenderer& operator=(const GaussianRasterMIPRenderer&) = delete;
+
+    void render() {
+        const size_t pixel_count = size_t(image_width_) * size_t(image_height_);
+
+        CUDA_CHECK(cudaMemsetAsync(
+            device_bin_accum_, 0, pixel_count * size_t(num_bins_) * sizeof(float), stream_));
+
+        const int raster_threads = 256;
+        const int raster_blocks = divide_round_up(gaussian_count_, raster_threads);
+
+        rasterize_gaussians_binned_kernel<<<raster_blocks, raster_threads, 0, stream_>>>(
+            device_gaussians_,
+            gaussian_count_,
+            image_width_,
+            image_height_,
+            num_bins_,
+            camera_,
+            box_,
+            hard_gate_,
+            n_per_axis_,
+            device_bin_accum_);
+
+        CUDA_CHECK(cudaGetLastError());
+
+        const int reduce_threads = 256;
+        const int reduce_blocks = divide_round_up(int(pixel_count), reduce_threads);
+
+        reduce_bins_to_image_kernel<<<reduce_blocks, reduce_threads, 0, stream_>>>(
+            device_bin_accum_,
+            device_output_image_,
+            int(pixel_count),
+            num_bins_);
+
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    void synchronize() {
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+    }
+
+    cudaStream_t stream() const {
+        return stream_;
+    }
+
+    std::vector<float> download_image() {
+        std::vector<float> image(
+            size_t(image_width_) * size_t(image_height_));
+
+        CUDA_CHECK(cudaMemcpyAsync(
+            image.data(),
+            device_output_image_,
+            image.size() * sizeof(float),
+            cudaMemcpyDeviceToHost,
+            stream_));
+
+        synchronize();
+        return image;
+    }
+
+private:
+    int gaussian_count_ = 0;
+    int image_width_ = 0;
+    int image_height_ = 0;
+    int num_bins_ = 16;
+
+    Camera camera_{};
+    AxisAlignedBox box_{};
+    bool hard_gate_ = false;
+    int n_per_axis_ = 2;
+
+    cudaStream_t stream_{};
+    GaussianDisk* device_input_gaussians_ = nullptr;
+    GaussianGPU* device_gaussians_ = nullptr;
+    float* device_output_image_ = nullptr;
+    float* device_bin_accum_ = nullptr;
 };
 
 // ============================================================================
@@ -1890,7 +2513,8 @@ static std::vector<float> benchmark_renderer(
 enum class RepresentationType {
     DenseVoxel,
     PretrainedGaussian,
-    PretrainedGaussianHardGated
+    PretrainedGaussianHardGated,
+    PretrainedGaussianRasterized
 };
 
 static RepresentationType parse_representation_type(const std::string& value) {
@@ -1906,24 +2530,30 @@ static RepresentationType parse_representation_type(const std::string& value) {
         return RepresentationType::PretrainedGaussianHardGated;
     }
 
+    if (value == "pretrained_gaussian_rasterized") {
+        return RepresentationType::PretrainedGaussianRasterized;
+    }
+
     throw std::runtime_error(
         "Invalid representation type '" + value +
-        "'. Expected dense_voxel, pretrained_gaussian, or "
-        "pretrained_gaussian_hard_gated.");
+        "'. Expected dense_voxel, pretrained_gaussian, "
+        "pretrained_gaussian_hard_gated, or pretrained_gaussian_rasterized.");
 }
 
 int main(int argument_count, char** arguments) {
     try {
-        if (argument_count != 18) {
+        if (argument_count != 18 && argument_count != 19) {
             std::cerr
                 << "Usage:\n  "
                 << arguments[0]
-                << " <dense_voxel|pretrained_gaussian|pretrained_gaussian_hard_gated>"
+                << " <dense_voxel|pretrained_gaussian|pretrained_gaussian_hard_gated"
+                << "|pretrained_gaussian_rasterized>"
                 << " input.bin output.pfm"
                 << " width height ray_samples benchmark_frames"
                 << " yaw pitch roll fov_y"
                 << " min_x min_y min_z"
-                << " max_x max_y max_z\n\n"
+                << " max_x max_y max_z"
+                << " [n_per_axis]\n\n"
                 << "Examples:\n  "
                 << arguments[0]
                 << " dense_voxel volume.bin voxel.pfm"
@@ -1934,7 +2564,22 @@ int main(int argument_count, char** arguments) {
                 << " pretrained_gaussian gaussians.bin gaussian.pfm"
                 << " 128 128 64 200"
                 << " 0 0 0 90"
-                << " -1 -1 -1 1 1 1\n";
+                << " -1 -1 -1 1 1 1\n\n  "
+                << arguments[0]
+                << " pretrained_gaussian_hard_gated gaussians.bin gaussian.pfm"
+                << " 128 128 64 200"
+                << " 0 0 0 90"
+                << " -1 -1 -1 1 1 1"
+                << " 4   # n_per_axis: blocks per axis in the stitched scene"
+                << " (defaults to 2 if omitted -- the original octant case)\n\n  "
+                << arguments[0]
+                << " pretrained_gaussian_rasterized gaussians.bin gaussian.pfm"
+                << " 128 128 16 200"
+                << " 0 0 0 90"
+                << " -1 -1 -1 1 1 1"
+                << " 4   # ray_samples (16 above) is reused as the number of"
+                << " depth bins Gaussians accumulate into (not a per-pixel"
+                << " sample count) -- see section 14b's comment block.\n";
 
             return EXIT_FAILURE;
         }
@@ -1954,6 +2599,17 @@ int main(int argument_count, char** arguments) {
         const float pitch = std::stof(arguments[9]);
         const float roll = std::stof(arguments[10]);
         const float vertical_fov = std::stof(arguments[11]);
+
+        // Blocks per axis in a hard-gated stitched scene (see same_cell()).
+        // Optional and ignored outside pretrained_gaussian_hard_gated;
+        // defaults to 2 (the original octant case) so existing 18-argument
+        // invocations keep working unchanged.
+        const int n_per_axis =
+            argument_count == 19 ? std::stoi(arguments[18]) : 2;
+
+        if (n_per_axis < 1) {
+            throw std::runtime_error("n_per_axis must be >= 1.");
+        }
 
         AxisAlignedBox box{};
 
@@ -1997,23 +2653,28 @@ int main(int argument_count, char** arguments) {
             image_width,
             image_height);
 
+        const char* representation_name =
+            representation == RepresentationType::DenseVoxel ? "dense_voxel"
+            : representation == RepresentationType::PretrainedGaussian ? "pretrained_gaussian"
+            : representation == RepresentationType::PretrainedGaussianHardGated ? "pretrained_gaussian_hard_gated"
+            : "pretrained_gaussian_rasterized";
+
         std::cout
-            << "Representation: "
-            << (representation == RepresentationType::DenseVoxel
-                    ? "dense_voxel"
-                    : representation == RepresentationType::PretrainedGaussian
-                        ? "pretrained_gaussian"
-                        : "pretrained_gaussian_hard_gated")
-            << "\n"
+            << "Representation: " << representation_name << "\n"
             << "Output: " << image_width << " x " << image_height << "\n"
-            << "Ray samples: " << ray_sample_count << "\n"
+            << "Ray samples: " << ray_sample_count
+            << (representation == RepresentationType::PretrainedGaussianRasterized
+                    ? " (used as depth-bin count, not a per-pixel sample count)"
+                    : "")
+            << "\n"
             << "Camera position: "
             << camera_position.x << " "
             << camera_position.y << " "
             << camera_position.z << "\n"
             << "Yaw/pitch/roll: "
             << yaw << " " << pitch << " " << roll << "\n"
-            << "Vertical FOV: " << vertical_fov << "\n";
+            << "Vertical FOV: " << vertical_fov << "\n"
+            << "n_per_axis (hard-gated/rasterized scenes only): " << n_per_axis << "\n";
 
         constexpr int warmup_frame_count = 20;
 
@@ -2056,6 +2717,32 @@ int main(int argument_count, char** arguments) {
                 average_render_time_ms,
                 frames_per_second);
         }
+        else if (representation == RepresentationType::PretrainedGaussianRasterized) {
+            const std::vector<GaussianDisk> gaussians =
+                read_gaussian_file(input_path);
+
+            std::cout << "Gaussians: " << gaussians.size() << "\n";
+
+            // hard_gate is always meaningful here (unlike the ray-marched
+            // path, there is no "off" variant of this representation type --
+            // n_per_axis=1 makes gating a no-op naturally, same as elsewhere).
+            GaussianRasterMIPRenderer renderer(
+                gaussians,
+                image_width,
+                image_height,
+                ray_sample_count,
+                camera,
+                box,
+                /*hard_gate=*/true,
+                n_per_axis);
+
+            output_image = benchmark_renderer(
+                renderer,
+                warmup_frame_count,
+                benchmark_frame_count,
+                average_render_time_ms,
+                frames_per_second);
+        }
         else {
             const std::vector<GaussianDisk> gaussians =
                 read_gaussian_file(input_path);
@@ -2073,7 +2760,8 @@ int main(int argument_count, char** arguments) {
                 ray_sample_count,
                 camera,
                 box,
-                hard_gate);
+                hard_gate,
+                n_per_axis);
 
             std::cout
                 << "Gaussian-tile pairs: "

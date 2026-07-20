@@ -59,8 +59,17 @@ Full (the whole 4x4x4 = 64-block pilot grid, custom output naming):
         --blocks-dir  fafb_pilot/models/blocks_v18 \
         --n-per-axis  4 \
         --z0 30 --y0 30 --x0 30 \
-        --output-dir  results/data \
+        --output-dir  fafb_pilot/results/data \
         --name        blocks_v18_full
+
+From a gaussians_json.py-style export instead of per-block .pth checkpoints
+(one JSON covering every block in the grid -- --blocks-dir/--checkpoint-name
+and --gaussian-json are mutually exclusive; the JSON is loaded ONCE up
+front and reused for all n_per_axis^3 blocks, not re-parsed per block):
+
+    /venv/r3-ml/bin/python3 fafb_pilot/code/data/stitch_blocks.py \
+        --gaussian-json fafb_pilot/code/data/gaussians.json \
+        --n-per-axis    2
 
 STEPS
 -----
@@ -92,10 +101,16 @@ OUTPUT FILES (written to --output-dir, named by --name)
   gt_<name>.tif                    combined ground truth, float32 [0,1]
   vol_stitch_mid_slice_<name>.png  GT / stitched-pred / |diff| mid-slice check
   metrics_<name>.csv               MSE, PSNR, SSIM, Max Error, Output Min/Max
+  metrics_<name>.xlsx              same metrics, as a spreadsheet
   gaussian_<name>.json             combined Gaussians (all blocks, remapped
                                     into the shared global frame): means,
                                     log_scales, quats, intensities (raw,
                                     pre-softplus -- see "inten_param")
+  gaussian_<name>.pth              same combined Gaussians as a .pth
+                                    checkpoint (same dict shape as
+                                    stitch_block_gaussians.py's output) --
+                                    feeds directly into export_renderer_bin.py's
+                                    pretrained_gaussian mode for CUDA rendering
 
 REQUIREMENTS
 ------------
@@ -111,7 +126,6 @@ REQUIREMENTS
 """
 import csv
 import json
-import math
 import os
 import sys
 import argparse
@@ -122,7 +136,10 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # fafb_pilot/code
 import libs  # sets up sys.path to scripts/ + TORCH_CUDA_ARCH_LIST
-from libs import imshow_gray, save_volume_tif, compute_metrics
+from libs import (
+    imshow_gray, save_volume_tif, compute_metrics,
+    load_gaussians_json, gaussian_cloud_from_entry, save_metrics_excel,
+)
 
 import _3dgs._3dgs as _mod
 _mod.USE_CUDA_KERNEL = True
@@ -156,12 +173,25 @@ def block_name(iz, iy, ix):
 
 # ── Step 1: load one block, native frame (no remap needed -- see docstring) ─
 
-def load_block(blocks_dir, data_dir, z0, y0, x0, iz, iy, ix, checkpoint_name, aabb, device, cfg):
+def load_block(blocks_dir, data_dir, z0, y0, x0, iz, iy, ix, checkpoint_name, aabb, device, cfg,
+               gaussians_json_data=None):
     """Load one block's GaussianCloud + its own ground-truth tif, both in
-    that block's own native [-1,1]^3 frame -- untouched, exactly as trained."""
+    that block's own native [-1,1]^3 frame -- untouched, exactly as trained.
+    If gaussians_json_data is given (a pre-loaded gaussians_json.py export,
+    see --gaussian-json), the GaussianCloud is built from that instead of a
+    per-block .pth checkpoint under blocks_dir."""
     bname = block_name(iz, iy, ix)
-    ckpt_path = os.path.join(blocks_dir, bname, checkpoint_name)
-    gc = GaussianCloud.load(ckpt_path, aabb, device, cfg)
+
+    if gaussians_json_data is not None:
+        if bname not in gaussians_json_data:
+            raise KeyError(
+                f"{bname!r} not found in --gaussian-json export "
+                f"(available: {sorted(gaussians_json_data.keys())})"
+            )
+        gc = gaussian_cloud_from_entry(gaussians_json_data[bname], aabb, device, cfg)
+    else:
+        ckpt_path = os.path.join(blocks_dir, bname, checkpoint_name)
+        gc = GaussianCloud.load(ckpt_path, aabb, device, cfg)
 
     vol_path = os.path.join(data_dir, f"image_z{z0 + iz}_y{y0 + iy}_x{x0 + ix}.tif")
     vol_t, _, _ = _load_volume(vol_path)
@@ -195,64 +225,78 @@ def reconstruct_block(gc, dataset, device, chunk_n):
 # fafb_pilot/code/representation/stitch_block_gaussians.py, whose exact
 # convention this mirrors.)
 
-def remap_gaussians_to_global(gc, iz, iy, ix, n_per_axis):
+def remap_gaussians_to_global(gc, iz, iy, ix, nz, ny, nx):
     """Remap one block's own [-1,1]^3-local means/log_scales into the shared
-    global frame it owns (combined_range(iz/iy/ix, n_per_axis) on each axis).
+    global frame it owns (combined_range(iz/iy/ix, nz/ny/nx) on each axis).
+    nz/ny/nx are independent so this also covers non-cubic grids (e.g. a 2-
+    block strip along x has nz=ny=1, nx=2 -- extent_x=0.5, extent_y=extent_z=1).
     Quaternions and intensities are unaffected by a uniform (isotropic)
     rescale, so they pass through unchanged."""
-    extent = 1.0 / n_per_axis
-    log_extent = math.log(extent)
-
-    # means stored (x, y, z) -- matches VolumeDataset._indices_to_pts and
-    # stitch_block_gaussians.py's remap_block().
+    # means/log_scales stored (x, y, z) -- matches VolumeDataset._indices_to_pts
+    # and stitch_block_gaussians.py's remap_block().
+    extent = torch.tensor(
+        [1.0 / nx, 1.0 / ny, 1.0 / nz],
+        dtype=gc.means.dtype, device=gc.means.device,
+    )
     center = torch.tensor(
         [
-            -1.0 + (ix + 0.5) * (2.0 / n_per_axis),
-            -1.0 + (iy + 0.5) * (2.0 / n_per_axis),
-            -1.0 + (iz + 0.5) * (2.0 / n_per_axis),
+            -1.0 + (ix + 0.5) * (2.0 / nx),
+            -1.0 + (iy + 0.5) * (2.0 / ny),
+            -1.0 + (iz + 0.5) * (2.0 / nz),
         ],
         dtype=gc.means.dtype, device=gc.means.device,
     )
 
-    means_global = center.unsqueeze(0) + gc.means.detach() * extent
-    log_scales_global = gc.log_s.detach() + log_extent
+    means_global = center.unsqueeze(0) + gc.means.detach() * extent.unsqueeze(0)
+    log_scales_global = gc.log_s.detach() + torch.log(extent).unsqueeze(0)
 
     return means_global.cpu(), log_scales_global.cpu(), gc.quats.detach().cpu(), gc.inten.detach().cpu()
 
 
 # ── Step 3: stitch every block into the combined, hard-gated volume ────────
 
-def stitch_blocks(blocks_dir, data_dir, n_per_axis, z0, y0, x0, checkpoint_name, device, cfg):
-    """Reconstruct every block and place it into its own disjoint slice of
-    the combined array -- hard gating "for free" by construction (see
-    module docstring)."""
+def stitch_blocks_grid(blocks_dir, data_dir, nz, ny, nx, z0, y0, x0, checkpoint_name, device, cfg,
+                       gaussians_json_data=None):
+    """General grid version: nz/ny/nx blocks along each axis INDEPENDENTLY --
+    need not be equal. E.g. nz=ny=1, nx=2 stitches just 2 blocks side by side
+    along x; nz=1, ny=nx=2 stitches a 2x2 sheet of 4 blocks. stitch_blocks()
+    below is the n_per_axis^3 cube special case used by this script's own CLI.
+
+    Reconstructs every block and places it into its own disjoint slice of the
+    combined array -- hard gating "for free" by construction (see module
+    docstring). gaussians_json_data, if given, is a pre-loaded
+    gaussians_json.py export (see libs.load_gaussians_json) covering every
+    block in the grid -- loaded ONCE by the caller, not per block."""
     aabb = AABB.unit()
 
-    print(f"Stitching {n_per_axis}^3 = {n_per_axis ** 3} blocks, hard-gated "
+    print(f"Stitching {nz}x{ny}x{nx} = {nz * ny * nx} blocks, hard-gated "
           f"(no cross-block blending).")
     print("Per-axis ownership (generalises eda.ipynb's [-1,0]/[0,1]):")
-    for idx in range(n_per_axis):
-        lo, hi = combined_range(idx, n_per_axis)
-        print(f"  block index {idx}: owns combined range [{lo:.3f}, {hi:.3f}]")
+    for axis_name, n_axis in (("z", nz), ("y", ny), ("x", nx)):
+        for idx in range(n_axis):
+            lo, hi = combined_range(idx, n_axis)
+            print(f"  {axis_name} index {idx}/{n_axis}: owns combined range [{lo:.3f}, {hi:.3f}]")
 
     gt_cube, rec_cube, block_voxels = None, None, None
     all_means, all_log_scales, all_quats, all_inten = [], [], [], []
 
-    for iz in range(n_per_axis):
-        for iy in range(n_per_axis):
-            for ix in range(n_per_axis):
+    for iz in range(nz):
+        for iy in range(ny):
+            for ix in range(nx):
                 bname, gc, vol_t = load_block(
                     blocks_dir, data_dir, z0, y0, x0, iz, iy, ix,
                     checkpoint_name, aabb, device, cfg,
+                    gaussians_json_data=gaussians_json_data,
                 )
                 dataset = VolumeDataset(vol_t, aabb, cfg)
                 pred_vol = reconstruct_block(gc, dataset, device, cfg.chunk_n)
 
                 if gt_cube is None:
                     block_voxels = vol_t.shape[0]
-                    cube_voxels = n_per_axis * block_voxels
-                    gt_cube = np.zeros((cube_voxels,) * 3, dtype=np.float32)
-                    rec_cube = np.zeros((cube_voxels,) * 3, dtype=np.float32)
+                    gt_cube = np.zeros(
+                        (nz * block_voxels, ny * block_voxels, nx * block_voxels), dtype=np.float32
+                    )
+                    rec_cube = np.zeros_like(gt_cube)
 
                 sz = slice(iz * block_voxels, (iz + 1) * block_voxels)
                 sy = slice(iy * block_voxels, (iy + 1) * block_voxels)
@@ -267,7 +311,7 @@ def stitch_blocks(blocks_dir, data_dir, n_per_axis, z0, y0, x0, checkpoint_name,
                 # Step 6: remap this block's Gaussians into the global frame
                 # for the gaussian_<name>.json output (see module docstring).
                 means_g, log_scales_g, quats_g, inten_g = remap_gaussians_to_global(
-                    gc, iz, iy, ix, n_per_axis
+                    gc, iz, iy, ix, nz, ny, nx
                 )
                 all_means.append(means_g)
                 all_log_scales.append(log_scales_g)
@@ -283,6 +327,17 @@ def stitch_blocks(blocks_dir, data_dir, n_per_axis, z0, y0, x0, checkpoint_name,
     }
 
     return gt_cube, rec_cube, combined_gaussians
+
+
+def stitch_blocks(blocks_dir, data_dir, n_per_axis, z0, y0, x0, checkpoint_name, device, cfg,
+                  gaussians_json_data=None):
+    """n_per_axis^3 cube special case of stitch_blocks_grid() -- used by this
+    script's own CLI (see --n-per-axis)."""
+    return stitch_blocks_grid(
+        blocks_dir, data_dir, n_per_axis, n_per_axis, n_per_axis,
+        z0, y0, x0, checkpoint_name, device, cfg,
+        gaussians_json_data=gaussians_json_data,
+    )
 
 
 # ── Step 5: save outputs ─────────────────────────────────────────────────────
@@ -326,6 +381,19 @@ def save_gaussians_json(combined_gaussians, output_dir, name):
     print(f"Saved {out_json} ({out['n_gaussians']} Gaussians)")
 
 
+def save_gaussians_pth(combined_gaussians, output_dir, name):
+    """Combined, globally-remapped Gaussians as a .pth checkpoint -- same
+    dict shape as fafb_pilot/code/representation/stitch_block_gaussians.py's
+    own output, so it can be fed straight into export_renderer_bin.py's
+    existing pretrained_gaussian mode (--means-key means --scales-key
+    log_scales --quaternions-key quats --intensity-key intensities
+    --scale-activation exp --intensity-activation softplus
+    --quaternion-order wxyz -- the same flags run.sh already uses)."""
+    out_pth = os.path.join(output_dir, f"gaussian_{name}.pth")
+    torch.save(combined_gaussians, out_pth)
+    print(f"Saved {out_pth} ({combined_gaussians['means'].shape[0]} Gaussians)")
+
+
 def save_metrics_csv(pred_vol, gt_vol, output_dir, name):
     metrics = compute_metrics(pred_vol, gt_vol)
     out_csv = os.path.join(output_dir, f"metrics_{name}.csv")
@@ -334,6 +402,7 @@ def save_metrics_csv(pred_vol, gt_vol, output_dir, name):
         writer.writeheader()
         writer.writerow(metrics)
     print(f"Saved {out_csv}")
+    save_metrics_excel([metrics], output_dir, f"metrics_{name}.xlsx")
     return metrics
 
 
@@ -345,9 +414,15 @@ def build_parser() -> argparse.ArgumentParser:
                     "combined volume using hard position gating.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--blocks-dir", required=True,
+    parser.add_argument("--blocks-dir", default=None,
                         help="Directory containing b_<iz><iy><ix>/<checkpoint-name> "
-                             "subdirectories, e.g. fafb_pilot/models/blocks_v18")
+                             "subdirectories, e.g. fafb_pilot/models/blocks_v18. "
+                             "Mutually exclusive with --gaussian-json.")
+    parser.add_argument("--gaussian-json", default=None,
+                        help="Path to a gaussians_json.py-style export covering "
+                             "EVERY block in the n_per_axis^3 grid, keyed by block "
+                             "name (b_<iz><iy><ix>) -- alternative to --blocks-dir/"
+                             "--checkpoint-name. Loaded once and reused for every block.")
     parser.add_argument("--n-per-axis", type=int, default=2,
                         help="Blocks per axis (n_per_axis^3 blocks total). "
                              "2 matches test.ipynb's 8-block octant.")
@@ -361,7 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "trained (see retrain_pilot_blocks_v18.sh).")
     parser.add_argument("--checkpoint-name", default="best.pth")
     parser.add_argument("--output-dir",
-                        default="/root/project/results/data",
+                        default="/root/project/fafb_pilot/results/data",
                         help="Directory to write the stitched tif/figure/metrics into "
                              "(project convention: generated outputs live under results/).")
     parser.add_argument("--name", default=None,
@@ -390,9 +465,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+
+    if bool(args.blocks_dir) == bool(args.gaussian_json):
+        raise SystemExit("Specify exactly one of --blocks-dir or --gaussian-json.")
+
     device = torch.device(args.device)
     os.makedirs(args.output_dir, exist_ok=True)
-    name = args.name or f"{os.path.basename(os.path.normpath(args.blocks_dir))}_n{args.n_per_axis}"
+    default_label = (os.path.basename(os.path.normpath(args.blocks_dir)) if args.blocks_dir
+                      else os.path.splitext(os.path.basename(args.gaussian_json))[0])
+    name = args.name or f"{default_label}_n{args.n_per_axis}"
+
+    gaussians_json_data = load_gaussians_json(args.gaussian_json) if args.gaussian_json else None
 
     cfg = argparse.Namespace(
         scale_min_clamp=args.scale_min_clamp,
@@ -415,6 +498,7 @@ def main() -> None:
     gt_cube, rec_cube, combined_gaussians = stitch_blocks(
         args.blocks_dir, args.data_dir, args.n_per_axis,
         args.z0, args.y0, args.x0, args.checkpoint_name, device, cfg,
+        gaussians_json_data=gaussians_json_data,
     )
     print(f"Combined cube: {rec_cube.shape}")
 
@@ -426,6 +510,7 @@ def main() -> None:
     save_mid_slice(rec_cube, gt_cube, args.output_dir, name)
     metrics = save_metrics_csv(rec_cube, gt_cube, args.output_dir, name)
     save_gaussians_json(combined_gaussians, args.output_dir, name)
+    save_gaussians_pth(combined_gaussians, args.output_dir, name)
 
     print(f"\nCombined stitched-volume metrics: "
           f"vol_PSNR={metrics['PSNR']:.2f} dB, SSIM={metrics['SSIM']:.4f}")

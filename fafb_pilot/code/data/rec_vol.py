@@ -4,8 +4,8 @@ against its ground-truth EM block.
 
 USAGE
 -----
-Minimal (just volume + checkpoint; output goes to the default results/data
-dir, no single-point sanity check):
+Minimal (just volume + checkpoint; output goes to the default
+fafb_pilot/results/data dir, no single-point sanity check):
 
     /venv/r3-ml/bin/python3 fafb_pilot/code/data/rec_vol.py \\
         --volume     data/fafb/blocks/image_z32_y31_x31.tif \\
@@ -16,9 +16,18 @@ Full (custom output dir, explicit name, single-point sanity check):
     /venv/r3-ml/bin/python3 fafb_pilot/code/data/rec_vol.py \\
         --volume      data/fafb/blocks/image_z32_y31_x32.tif \\
         --checkpoint  fafb_pilot/models/blocks_v2/b_212/best.pth \\
-        --output-dir  results/data \\
+        --output-dir  fafb_pilot/results/data \\
         --name        b_212 \\
         --query-point 0.3369 0.7638 -0.3207
+
+From a gaussians_json.py-style export instead of a .pth checkpoint (one
+JSON holding every block, keyed by block name -- --checkpoint and
+--gaussian-json are mutually exclusive):
+
+    /venv/r3-ml/bin/python3 fafb_pilot/code/data/rec_vol.py \\
+        --volume        data/fafb/blocks/image_z32_y31_x31.tif \\
+        --gaussian-json fafb_pilot/code/data/gaussians.json \\
+        --block-name    b_211
 
 STEPS
 -----
@@ -40,6 +49,7 @@ OUTPUT FILES (written to --output-dir, named by --name)
                                   (float32 [0,1], same scale as rec_<name>.tif --
                                   directly diffable in any tif viewer, e.g. Fiji)
   metrics_<name>.csv             MSE, PSNR, SSIM, Max Error, Output Min/Max
+  metrics_<name>.xlsx            same metrics, as a spreadsheet
   vol_rec_slices_<name>.pdf      3x3 grid: {Pred,GT,Diff} x {Sagittal,Coronal,Axial}
   pred_<Plane>_<name>.png        high-res per-plane prediction slices
   gt_<Plane>_<name>.png          high-res per-plane ground-truth slices
@@ -62,8 +72,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
-# import libs  # sets up sys.path to scripts/ + TORCH_CUDA_ARCH_LIST
-from libs import imshow_gray, save_png, save_volume_tif, compute_metrics
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # fafb_pilot/code
+import libs  # sets up sys.path to scripts/ + TORCH_CUDA_ARCH_LIST
+from libs import (
+    imshow_gray, save_png, save_volume_tif, compute_metrics,
+    load_gaussians_json, gaussian_cloud_from_entry, save_metrics_excel,
+)
 
 import _3dgs._3dgs as _mod
 _mod.USE_CUDA_KERNEL = True
@@ -82,10 +96,16 @@ def load_ground_truth(volume_path):
 
 # ── Step 2: model ────────────────────────────────────────────────────────────
 
-def load_model(checkpoint_path, aabb, device, cfg):
-    """Load a trained GaussianCloud checkpoint (.pth or .npz)."""
-    gc = GaussianCloud.load(checkpoint_path, aabb, device, cfg)
-    print(f"Loaded {gc.N} Gaussians from {checkpoint_path}")
+def load_model(checkpoint_path, aabb, device, cfg, gaussian_json_entry=None):
+    """Load a trained GaussianCloud, either from a .pth/.npz checkpoint or
+    from an already-loaded gaussians_json.py entry (see --gaussian-json /
+    --block-name)."""
+    if gaussian_json_entry is not None:
+        gc = gaussian_cloud_from_entry(gaussian_json_entry, aabb, device, cfg)
+        print(f"Loaded {gc.N} Gaussians from gaussian-json entry")
+    else:
+        gc = GaussianCloud.load(checkpoint_path, aabb, device, cfg)
+        print(f"Loaded {gc.N} Gaussians from {checkpoint_path}")
     return gc
 
 
@@ -154,6 +174,7 @@ def save_metrics_csv(pred_vol, gt_vol, output_dir, name):
         writer.writeheader()
         writer.writerow(metrics)
     print(f"Saved {out_csv}")
+    save_metrics_excel([metrics], output_dir, f"metrics_{name}.xlsx")
 
 
 # ── Step 8: 3-plane comparison ───────────────────────────────────────────────
@@ -198,11 +219,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--volume", required=True,
                         help="Ground-truth block tif, e.g. data/fafb/blocks/image_z32_y31_x32.tif")
-    parser.add_argument("--checkpoint", required=True,
+    parser.add_argument("--checkpoint", default=None,
                         help="Trained GaussianCloud checkpoint (.pth or .npz), "
-                             "e.g. models/blocks_v2/b_212/best.pth")
+                             "e.g. models/blocks_v2/b_212/best.pth. Mutually "
+                             "exclusive with --gaussian-json.")
+    parser.add_argument("--gaussian-json", default=None,
+                        help="Path to a gaussians_json.py-style export (ALL "
+                             "blocks in one JSON, keyed by block name) -- "
+                             "alternative to --checkpoint. Requires --block-name.")
+    parser.add_argument("--block-name", default=None,
+                        help="Key into --gaussian-json to select which block's "
+                             "Gaussians to use, e.g. b_211. Required with --gaussian-json.")
     parser.add_argument("--output-dir",
-                        default="/root/project/results/data",
+                        default="/root/project/fafb_pilot/results/data",
                         help="Directory to write figures/metrics/npy into "
                              "(project convention: generated outputs live under results/).")
     parser.add_argument("--name", default=None,
@@ -239,9 +268,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+
+    if bool(args.checkpoint) == bool(args.gaussian_json):
+        raise SystemExit("Specify exactly one of --checkpoint or --gaussian-json.")
+    if args.gaussian_json and not args.block_name:
+        raise SystemExit("--gaussian-json requires --block-name (e.g. b_211).")
+
     device = torch.device(args.device)
     os.makedirs(args.output_dir, exist_ok=True)
-    name = args.name or os.path.basename(os.path.dirname(args.checkpoint))
+    name = args.name or (args.block_name if args.gaussian_json
+                          else os.path.basename(os.path.dirname(args.checkpoint)))
+
+    gaussian_json_entry = None
+    if args.gaussian_json:
+        data = load_gaussians_json(args.gaussian_json)
+        if args.block_name not in data:
+            raise SystemExit(
+                f"{args.block_name!r} not found in {args.gaussian_json} "
+                f"(available: {sorted(data.keys())})"
+            )
+        gaussian_json_entry = data[args.block_name]
 
     # Step 1: ground truth.
     vol_t = load_ground_truth(args.volume)
@@ -264,7 +310,7 @@ def main() -> None:
     dataset = VolumeDataset(vol_t, aabb, cfg)
 
     # Step 2: model.
-    gc = load_model(args.checkpoint, aabb, device, cfg)
+    gc = load_model(args.checkpoint, aabb, device, cfg, gaussian_json_entry)
 
     # Step 3: reconstruction.
     pred_vol = reconstruct_volume(gc, dataset, device, cfg.chunk_n)

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaussian-volume"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+    "h5py",
+    "tifffile",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["gaussian_volume*"]

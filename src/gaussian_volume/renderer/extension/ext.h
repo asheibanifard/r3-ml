@@ -16,7 +16,6 @@ torch::Tensor splat_mip(
         float lo_x, float hi_x, float lo_y, float hi_y, float lo_z, float hi_z,
         int out_h, int out_w, int depth_samples, int view_axis,
         float scale_min, float mahal_clamp,
-        float density_scale,
         int max_gauss_per_tile,
         bool print_stats,
         bool clamp_output);

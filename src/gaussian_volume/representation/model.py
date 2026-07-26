@@ -1,4 +1,4 @@
-# gaussian_volume/model.py
+# gaussian_volume/representation/model.py
 
 from __future__ import annotations
 

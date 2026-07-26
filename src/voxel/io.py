@@ -17,7 +17,7 @@ def load_volume(path: str | Path, *, device: torch.device) -> Tensor:
     training target in place of the synthetic sphere/torus/blob volume.
 
     Normalizes by the loaded volume's own min/max (mirrors
-    gaussian_volume.io.load_volume's default normalization), so it works
+    gaussian_volume.representation.io.load_volume's default normalization), so it works
     for both uint8 EM blocks ([0,255]) and any other integer/float range.
     """
     import tifffile

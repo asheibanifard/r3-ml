@@ -1,12 +1,35 @@
 /*
- * splat_mip.cu — tiled MIP splatting of a Gaussian mixture with
- * conservative per-tile culling.
+ * splat_mip.cu — tiled true Maximum Intensity Projection of a Gaussian
+ * mixture, with conservative per-tile culling.
+ *
+ * Each 3D Gaussian's peak value along the view axis, at any given
+ * screen-space (u,v), has a closed form: marginalizing/maximizing a
+ * Gaussian along one axis analytically yields an effective 2D Gaussian
+ * in the remaining two axes (see "Effective 2D precision after
+ * maximizing along the view axis" below), whose value at (u,v) is
+ * exactly that Gaussian's own maximum over the view axis at that pixel.
+ * So per-pixel `max_i( intensity_i * exp(-0.5 * effective_2D_mahalanobis_i) )`
+ * over every Gaussian covering that pixel IS a true max-intensity
+ * projection through the mixture -- no ray marching/depth sampling
+ * needed, and no Beer-Lambert opacity mapping: the output is the raw
+ * peak density value itself (same convention as
+ * gaussian_volume.renderer.rasterisation.dvr_ground_truth's ray-marched
+ * ground-truth MIP).
+ *
+ * Each pixel's Mahalanobis distance to a Gaussian is computed after
+ * clamping the offset to that pixel's own footprint (half a pixel-width
+ * on each side of its centre), not at its exact centre point -- so every
+ * pixel reports a Gaussian's true maximum anywhere within its footprint,
+ * and a Gaussian sharp enough to fall between two sample points is still
+ * captured exactly by whichever pixel's footprint contains its peak
+ * (footprints tile the plane with no gaps). The tile-culling radius
+ * below is padded by that same half pixel to stay a conservative bound.
  *
  * Exports:
  *   splat_mip(means, log_s, quats, inten, lo_x, hi_x, lo_y, hi_y, lo_z, hi_z,
  *             out_h, out_w, depth_samples, view_axis,
  *             scale_min, mahal_clamp,
- *             density_scale=1.0e-4, max_gauss_per_tile=0,
+ *             max_gauss_per_tile=0,
  *             print_stats=false, clamp_output=true)
  */
 
@@ -37,19 +60,14 @@ __global__ void splat_mip_tiled_kernel(
         float u_lo, float u_hi,
         float v_lo, float v_hi,
         float mahal_clamp,
-        float density_scale,
         int clamp_output,
         float* __restrict__ out) {
     __shared__ float s_u[K_TILE_GAUSS];
     __shared__ float s_v[K_TILE_GAUSS];
-    __shared__ float s_w[K_TILE_GAUSS];
     __shared__ float s_i[K_TILE_GAUSS];
     __shared__ float s_a[K_TILE_GAUSS];
     __shared__ float s_b[K_TILE_GAUSS];
-    __shared__ float s_c[K_TILE_GAUSS];
     __shared__ float s_d[K_TILE_GAUSS];
-    __shared__ float s_e[K_TILE_GAUSS];
-    __shared__ float s_f[K_TILE_GAUSS];
 
     const int tile_id = blockIdx.x;
     const int tile_y = tile_id / tiles_x;
@@ -66,43 +84,74 @@ __global__ void splat_mip_tiled_kernel(
     const int start = tile_offsets[tile_id];
     const int end = tile_offsets[tile_id + 1];
 
-    const float px = (out_w > 1)
-        ? (u_lo + (static_cast<float>(ic) / static_cast<float>(out_w - 1)) * (u_hi - u_lo))
-        : 0.5f * (u_lo + u_hi);
-    const float py = (out_h > 1)
-        ? (v_lo + (static_cast<float>(ir) / static_cast<float>(out_h - 1)) * (v_hi - v_lo))
-        : 0.5f * (v_lo + v_hi);
+    // Pixel-centre convention, matching model.py's "voxel index i has
+    // centre i+0.5, over [0,size]" (see rasterisation.py's _default_bounds):
+    // pixel ic spans [u_lo + ic*pixel_size_u, u_lo + (ic+1)*pixel_size_u),
+    // centred at u_lo + (ic+0.5)*pixel_size_u. This also removes the old
+    // out_w==1 special case for free (it reduces to the u_lo/u_hi midpoint
+    // automatically).
+    const float pixel_size_u = (u_hi - u_lo) / static_cast<float>(out_w);
+    const float pixel_size_v = (v_hi - v_lo) / static_cast<float>(out_h);
+    const float px = u_lo + (static_cast<float>(ic) + 0.5f) * pixel_size_u;
+    const float py = v_lo + (static_cast<float>(ir) + 0.5f) * pixel_size_v;
 
-    if (active) {
-        float acc = 0.f;
-        for (int t0 = start; t0 < end; t0 += K_TILE_GAUSS) {
-            const int tn = std::min(K_TILE_GAUSS, end - t0);
+    // Half this pixel's footprint in physical (u,v) units, on each side of
+    // its centre. Every point in the (u,v) plane belongs to exactly one
+    // pixel's footprint, so clamping each Gaussian's offset into this
+    // range before computing its Mahalanobis distance means whichever
+    // pixel's footprint contains a Gaussian's true peak always reports
+    // that peak exactly (offset clamps to (0,0), mah=0) -- a sharp
+    // Gaussian can no longer fall entirely between two sample points.
+    // Every other pixel's contribution is now this Gaussian's true
+    // maximum anywhere within ITS footprint too, not just its value at
+    // one infinitesimal centre point.
+    const float half_pixel_u = 0.5f * pixel_size_u;
+    const float half_pixel_v = 0.5f * pixel_size_v;
 
-            for (int i = lane; i < tn; i += nthreads) {
-                const int g = tile_indices[t0 + i];
-                s_u[i] = proj_u[g];
-                s_v[i] = proj_v[g];
-                s_a[i] = si_uu[g];
-                s_b[i] = si_uv[g];
-                s_d[i] = si_vv[g];
-                s_i[i] = inten[g];
-            }
-            __syncthreads();
+    // Shared-memory loading and both barriers must run for every thread in
+    // the block regardless of `active`, or a partial (edge) tile leaves
+    // some threads never reaching a __syncthreads() that others do --
+    // undefined behaviour per the CUDA barrier semantics. Only the
+    // per-pixel evaluation and the final write are safe to gate on
+    // `active`.
+    float peak = 0.f;
+    for (int t0 = start; t0 < end; t0 += K_TILE_GAUSS) {
+        const int tn = std::min(K_TILE_GAUSS, end - t0);
 
+        for (int i = lane; i < tn; i += nthreads) {
+            const int g = tile_indices[t0 + i];
+            s_u[i] = proj_u[g];
+            s_v[i] = proj_v[g];
+            s_a[i] = si_uu[g];
+            s_b[i] = si_uv[g];
+            s_d[i] = si_vv[g];
+            s_i[i] = inten[g];
+        }
+        __syncthreads();
+
+        if (active) {
             for (int i = 0; i < tn; ++i) {
-                const float du = px - s_u[i];
-                const float dv = py - s_v[i];
+                const float raw_du = px - s_u[i];
+                const float raw_dv = py - s_v[i];
+                // Residual distance from the pixel footprint's *nearest edge*
+                // to the Gaussian, not the clamped value itself: 0 when the
+                // Gaussian's peak is within this pixel's footprint, else the
+                // true distance shrunk by exactly half a pixel-width.
+                const float du = raw_du - fminf(fmaxf(raw_du, -half_pixel_u), half_pixel_u);
+                const float dv = raw_dv - fminf(fmaxf(raw_dv, -half_pixel_v), half_pixel_v);
                 const float mah = du * (s_a[i] * du + s_b[i] * dv)
                                 + dv * (s_b[i] * du + s_d[i] * dv);
-                if (mah >= mahal_clamp) continue;
-                acc += s_i[i] * __expf(-0.5f * mah);
+                if (mah < mahal_clamp) {
+                    const float contribution = s_i[i] * __expf(-0.5f * mah);
+                    peak = fmaxf(peak, contribution);
+                }
             }
-            __syncthreads();
         }
+        __syncthreads();
+    }
 
-        const float positive = fmaxf(acc, 0.f);
-        const float mapped = 1.f - __expf(-density_scale * positive);
-        out[ir * out_w + ic] = clamp_output ? fminf(fmaxf(mapped, 0.f), 1.f) : mapped;
+    if (active) {
+        out[ir * out_w + ic] = clamp_output ? fminf(fmaxf(peak, 0.f), 1.f) : peak;
     }
 }
 
@@ -111,7 +160,6 @@ torch::Tensor splat_mip(
         float lo_x, float hi_x, float lo_y, float hi_y, float lo_z, float hi_z,
         int out_h, int out_w, int depth_samples, int view_axis,
         float scale_min, float mahal_clamp,
-        float density_scale,
         int max_gauss_per_tile,
         bool print_stats,
         bool clamp_output) {
@@ -122,7 +170,6 @@ torch::Tensor splat_mip(
     TORCH_CHECK(inten.is_contiguous(), "inten must be contiguous");
     TORCH_CHECK(means.scalar_type() == torch::kFloat32, "float32 required");
     TORCH_CHECK(view_axis >= 0 && view_axis <= 2, "view_axis must be 0, 1, or 2");
-    TORCH_CHECK(density_scale >= 0.f, "density_scale must be non-negative");
     TORCH_CHECK(max_gauss_per_tile >= 0, "max_gauss_per_tile must be >= 0; use 0 for unlimited");
 
     const int N = static_cast<int>(means.size(0));
@@ -132,12 +179,11 @@ torch::Tensor splat_mip(
     float u_lo = 0.f, u_hi = 1.f, v_lo = 0.f, v_hi = 1.f;
     projected_axes_for_view_axis(view_axis, u_axis, v_axis, u_lo, u_hi, v_lo, v_hi,
                                  lo_x, hi_x, lo_y, hi_y, lo_z, hi_z);
-    const float u_scale = (out_w > 1)
-        ? (static_cast<float>(out_w - 1) / (u_hi - u_lo))
-        : 1.f;
-    const float v_scale = (out_h > 1)
-        ? (static_cast<float>(out_h - 1) / (v_hi - v_lo))
-        : 1.f;
+    // Pixel-index scale matching the kernel's pixel-centre convention
+    // (pixel ic centred at u_lo + (ic+0.5)/u_scale): 1 pixel-index unit ==
+    // one pixel-width, out_w pixels spanning [u_lo,u_hi] -- not out_w-1.
+    const float u_scale = static_cast<float>(out_w) / (u_hi - u_lo);
+    const float v_scale = static_cast<float>(out_h) / (v_hi - v_lo);
     const int tiles_x = (out_w + kTilePixW - 1) / kTilePixW;
     const int tiles_y = (out_h + kTilePixH - 1) / kTilePixH;
     const int num_tiles = tiles_x * tiles_y;
@@ -152,7 +198,7 @@ torch::Tensor splat_mip(
     const float* q_ptr = quats_cpu.data_ptr<float>();
     const float* i_ptr = inten_cpu.data_ptr<float>();
 
-    std::vector<float> proj_u(N), proj_v(N), proj_w(N);
+    std::vector<float> proj_u(N), proj_v(N);
     std::vector<float> si_uu(N), si_uv(N), si_vv(N);
     std::vector<float> proj_iv(N);
     std::vector<std::vector<int>> tile_lists(num_tiles);
@@ -193,19 +239,15 @@ torch::Tensor splat_mip(
         const float mz = m_ptr[g * 3 + 2];
 
         float mu_u_w = 0.f, mu_v_w = 0.f;
-        float Iuu = 0.f, Iuv = 0.f, Ivv = 0.f;
         float cuu = 0.f, cuv = 0.f, cvv = 0.f;
         if (view_axis == 0) {
             mu_u_w = mx; mu_v_w = my;
-            Iuu = Ixx; Iuv = Ixy; Ivv = Iyy;
             cuu = C00; cuv = C01; cvv = C11;
         } else if (view_axis == 1) {
             mu_u_w = mx; mu_v_w = mz;
-            Iuu = Ixx; Iuv = Ixz; Ivv = Izz;
             cuu = C00; cuv = C02; cvv = C22;
         } else {
             mu_u_w = my; mu_v_w = mz;
-            Iuu = Iyy; Iuv = Iyz; Ivv = Izz;
             cuu = C11; cuv = C12; cvv = C22;
         }
 
@@ -229,10 +271,20 @@ torch::Tensor splat_mip(
         const float tr = puu + pvv;
         const float disc = std::sqrt(std::max(0.f, (puu - pvv) * (puu - pvv) + 4.f * puv * puv));
         const float lam = 0.5f * (tr + disc);
-        const float radius = radius_scale * std::sqrt(std::max(lam, 1e-12f));
+        // + 0.5 pixel: the kernel now clamps each Gaussian's query offset
+        // to the covering pixel's footprint before evaluating it (see
+        // splat_mip_tiled_kernel), which lets a Gaussian influence a pixel
+        // up to half a pixel-width beyond the raw cutoff-ellipse distance
+        // used below. Padding the culling radius by that same half pixel
+        // keeps tile assignment a conservative superset, so a Gaussian is
+        // never excluded from a tile it can now actually affect.
+        const float radius = radius_scale * std::sqrt(std::max(lam, 1e-12f)) + 0.5f;
 
-        const float mu_u_px = (mu_u_w - u_lo) * u_scale;
-        const float mu_v_px = (mu_v_w - v_lo) * v_scale;
+        // -0.5: converts physical position to pixel-INDEX space, so a
+        // Gaussian exactly at pixel ic's centre maps to mu_u_px == ic (not
+        // ic+0.5) -- matching the kernel's own px/py pixel-centre formula.
+        const float mu_u_px = (mu_u_w - u_lo) * u_scale - 0.5f;
+        const float mu_v_px = (mu_v_w - v_lo) * v_scale - 0.5f;
 
         int u0 = static_cast<int>(std::floor(mu_u_px - radius));
         int u1 = static_cast<int>(std::ceil(mu_u_px + radius));
@@ -256,9 +308,19 @@ torch::Tensor splat_mip(
 
         proj_u[g] = mu_u_w;
         proj_v[g] = mu_v_w;
-        si_uu[g] = Iuu;
-        si_uv[g] = Iuv;
-        si_vv[g] = Ivv;
+        // eff00/eff01/eff11 (the Schur complement computed above), not the
+        // raw Iuu/Iuv/Ivv slice: for a Gaussian whose principal axes aren't
+        // aligned with the coordinate axes, the raw 2x2 slice of the 3x3
+        // precision matrix is NOT the correct effective 2D precision for
+        // its analytic maximum along the view axis -- only the Schur
+        // complement is (maximizing a joint Gaussian quadratic form over
+        // one variable at fixed others yields exactly this same reduced
+        // form). Iuu/Iuv/Ivv only coincide with eff00/eff01/eff11 for
+        // Gaussians whose rotation makes the view axis one of their own
+        // principal axes.
+        si_uu[g] = eff00;
+        si_uv[g] = eff01;
+        si_vv[g] = eff11;
         proj_iv[g] = softplus_stable(i_ptr[g]);
     }
 
@@ -301,7 +363,6 @@ torch::Tensor splat_mip(
                   << " >256=" << over256
                   << " >512=" << over512
                   << " >1024=" << over1024
-                  << " density_scale=" << density_scale
                   << " max_gauss_per_tile=" << max_gauss_per_tile
                   << std::endl;
     }
@@ -364,7 +425,7 @@ torch::Tensor splat_mip(
         d_off.data_ptr<int>(), d_idx.data_ptr<int>(),
         tiles_x, out_h, out_w,
         u_lo, u_hi, v_lo, v_hi,
-        mahal_clamp, density_scale, clamp_output ? 1 : 0,
+        mahal_clamp, clamp_output ? 1 : 0,
         out.data_ptr<float>());
 
     AT_CUDA_CHECK(cudaGetLastError());

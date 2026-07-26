@@ -1,4 +1,4 @@
-# gaussian_volume/checkpoint.py
+# gaussian_volume/representation/checkpoint.py
 
 from __future__ import annotations
 

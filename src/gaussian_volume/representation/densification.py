@@ -1,4 +1,4 @@
-# gaussian_volume/densification.py
+# gaussian_volume/representation/densification.py
 
 from __future__ import annotations
 

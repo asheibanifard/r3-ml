@@ -1,4 +1,4 @@
-# gaussian_volume/pruning.py
+# gaussian_volume/representation/pruning.py
 
 from __future__ import annotations
 

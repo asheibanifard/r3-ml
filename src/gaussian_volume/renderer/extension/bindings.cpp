@@ -25,9 +25,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("lo_z"), py::arg("hi_z"),
           py::arg("out_h"), py::arg("out_w"), py::arg("depth_samples"), py::arg("view_axis"),
           py::arg("scale_min"), py::arg("mahal_clamp"),
-          py::arg("density_scale") = 1.0e-4f,
           py::arg("max_gauss_per_tile") = 0,
           py::arg("print_stats") = false,
           py::arg("clamp_output") = true,
-          "Tiled MIP splatting of a Gaussian mixture with conservative culling.");
+          "Tiled true Maximum Intensity Projection of a Gaussian mixture with conservative culling.");
 }

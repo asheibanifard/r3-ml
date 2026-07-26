@@ -1,4 +1,4 @@
-# gaussian_volume/config.py
+# gaussian_volume/representation/config.py
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ except ModuleNotFoundError:  # Python < 3.11
 # Maps (toml section, toml key) -> argparse dest name, for every config value
 # that has a corresponding CLI parameter in
 # scripts/gaussian/representation/pipeline.py or
-# scripts/gaussian/rendering/rasterise.py. Config values fill in the
+# scripts/gaussian/rendering/pipeline.py. Config values fill in the
 # parameter defaults; explicit CLI flags always take precedence.
 _CONFIG_TO_ARG: dict[tuple[str, str], str] = {
     ("experiment", "seed"): "seed",
@@ -36,18 +36,12 @@ _CONFIG_TO_ARG: dict[tuple[str, str], str] = {
     ("output", "reconstruction"): "save_volume",
     ("logging", "checkpoint_every"): "checkpoint_every",
     ("logging", "log_every"): "log_every",
-    # rasterise.py: independent MIP-projection output resolution, decoupled
-    # from the volume's own voxel-grid dimensions (None/unset -> each view
-    # matches the volume's own shape, no downsampling).
-    ("rasterisation", "screen_width"): "screen_width",
-    ("rasterisation", "screen_height"): "screen_height",
-    # rasterise.py: ground-truth direct volume rendering (DVR) parameters.
-    ("rasterisation", "dvr_density_scale"): "dvr_density_scale",
+    # pipeline.py (rendering): ray-march sample spacing for the
+    # ground-truth "DVR" (a ray-marched MIP, not Beer-Lambert -- see
+    # gaussian_volume.renderer.rasterisation.dvr_ground_truth). Both this
+    # and the Gaussian-rasterised MIPs (splat_mip) are true max
+    # reductions needing no opacity mapping / auto-exposure.
     ("rasterisation", "dvr_step_size"): "dvr_step_size",
-    # rasterise.py: shared auto-exposure target for both the rasterised
-    # MIPs and the ground-truth DVR (when their density_scale is unset).
-    ("rasterisation", "target_opacity"): "target_opacity",
-    ("rasterisation", "reference_density_scale"): "reference_density_scale",
 }
 
 # Destinations that hold filesystem paths in the config, and so need

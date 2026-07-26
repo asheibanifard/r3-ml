@@ -36,9 +36,13 @@ __global__ void eval_volume_kernel(
         const int iz = n / (H * W);
         const int ih = (n % (H * W)) / W;
         const int iw = n % W;
-        cx = lo_x + ((W > 1) ? (static_cast<float>(iw) / static_cast<float>(W - 1)) : 0.5f) * (hi_x - lo_x);
-        cy = lo_y + ((H > 1) ? (static_cast<float>(ih) / static_cast<float>(H - 1)) : 0.5f) * (hi_y - lo_y);
-        cz = lo_z + ((D > 1) ? (static_cast<float>(iz) / static_cast<float>(D - 1)) : 0.5f) * (hi_z - lo_z);
+        // Voxel-centre convention: voxel index i has centre i+0.5, over
+        // [0,size] (matching model.py's means convention -- see
+        // rasterisation.py's _default_bounds). Dividing by W/H/D (not
+        // W-1/H-1/D-1) also removes the old size==1 special case for free.
+        cx = lo_x + (static_cast<float>(iw) + 0.5f) / static_cast<float>(W) * (hi_x - lo_x);
+        cy = lo_y + (static_cast<float>(ih) + 0.5f) / static_cast<float>(H) * (hi_y - lo_y);
+        cz = lo_z + (static_cast<float>(iz) + 0.5f) / static_cast<float>(D) * (hi_z - lo_z);
     }
 
     float acc = 0.f;

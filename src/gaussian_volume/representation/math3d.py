@@ -1,4 +1,4 @@
-# gaussian_volume/math3d.py
+# gaussian_volume/representation/math3d.py
 
 from __future__ import annotations
 

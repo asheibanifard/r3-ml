@@ -34,7 +34,7 @@ from gaussian_volume import (
     save_volume,
 )
 # config.py: TOML loading/merging and the per-run logger.
-from gaussian_volume.config import (
+from gaussian_volume.representation.config import (
     TrainingLogger,
     config_defaults,
     config_section,
@@ -43,7 +43,7 @@ from gaussian_volume.config import (
 )
 # training.py: the optimizer factory, densify/prune config builders, PSNR
 # metric, checkpoint-visualization helper, and the training loop itself.
-from gaussian_volume.training import (
+from gaussian_volume.representation.training import (
     CHECKPOINT_FIGURE_DPI,
     build_densification_config,
     build_pruning_config,
@@ -59,8 +59,9 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     Parse command-line arguments for Gaussian volume reconstruction.
 
     A --config TOML file, if given, supplies defaults for the parameters
-    listed in gaussian_volume.config._CONFIG_TO_ARG; any of those parameters
-    also passed explicitly on the command line override the config value.
+    listed in gaussian_volume.representation.config._CONFIG_TO_ARG; any of
+    those parameters also passed explicitly on the command line override
+    the config value.
     """
     # Default to the process's real argv (minus the script name) when the
     # caller doesn't supply one explicitly — lets tests pass a custom argv.

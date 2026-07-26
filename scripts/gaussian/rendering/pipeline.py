@@ -1,25 +1,32 @@
-# scripts/gaussian/rendering/rasterise.py
+# scripts/gaussian/rendering/pipeline.py
 """
 Rasterise a trained Gaussian-volume checkpoint: dense per-voxel evaluation
-and/or orthogonal MIP splatting via the CUDA rasterisation kernels
-(gaussian_volume.rasterisation — csrc/eval/{reconstruct_volume,splat_mip}.cu).
+(--mode volume, via the CUDA rasterisation kernel reconstruct_volume.cu)
+and/or a true Maximum Intensity Projection of the model's own normalized
+reconstruction (--mode mips):
 
-Separate from scripts/gaussian/reconstruct.py: that script reconstructs via
-the model's own normalized training-time formula (the CUDA training
-extension); this one rasterises via the unnormalized, Beer-Lambert-style
-kernels used for visualization (see gaussian_volume/rasterisation.py's
-module docstring for why the two won't produce identical images).
+    mip_{xy,xz,yz}.png   volume.amax(dim=axis) on the dense volume from
+                         reconstruct.reconstruct() -- the model's actual
+                         normalized training-time formula (V(x) = sum
+                         w_i f_i / (sum w_i + eps), via the CUDA training
+                         extension), the same one scripts/gaussian/
+                         reconstruct.py itself uses. This blends
+                         overlapping Gaussians the way training actually
+                         does; a per-Gaussian analytic max (as
+                         gaussian_volume.renderer.render_mip/splat_mip.cu
+                         computes) can never blend them, so it shows
+                         individual unblended Gaussians ("rice grains")
+                         instead of the smooth trained anatomy.
 
-Also optionally renders two ground-truth views directly on the raw voxel
-grid (no Gaussians, no CUDA kernel — pure PyTorch) alongside the
-rasterised MIPs, for direct side-by-side comparison. Auto-discovered from
-the checkpoint's stored input path unless --gt-volume/--no-gt-volume says
-otherwise:
+Also optionally renders a ground-truth view directly on the raw voxel
+grid (no Gaussians — pure PyTorch) alongside the MIPs, for direct
+side-by-side comparison. Auto-discovered from the checkpoint's stored
+input path unless --gt-volume/--no-gt-volume says otherwise:
 
-    gt_mip_{xy,xz,yz}.png   plain Maximum Intensity Projection (max-reduction)
-    gt_dvr_{xy,xz,yz}.png   front-to-back Beer-Lambert direct volume
-                            rendering (DVR), marching parallel rays along
-                            each axis — see --dvr-density-scale/--dvr-step-size
+    gt_dvr_{xy,xz,yz}.png   ray-marched Maximum Intensity Projection (NOT
+                            Beer-Lambert DVR, despite the name — kept for
+                            continuity with the existing CLI/config
+                            surface) — see --dvr-step-size
 """
 
 from __future__ import annotations
@@ -45,19 +52,23 @@ from PIL import Image
 from gaussian_volume import (
     load_volume,
     render_orthogonal_dvr_ground_truth,
-    render_orthogonal_mips,
-    render_orthogonal_mips_ground_truth,
     render_volume,
     save_volume,
 )
-from gaussian_volume.config import config_defaults, load_config
+from gaussian_volume.representation.config import config_defaults, load_config
 
-# Reuse reconstruct.py's checkpoint-loading/model-building helpers instead
-# of duplicating them.
+# Reuse reconstruct.py's checkpoint-loading/model-building/reconstruction
+# helpers instead of duplicating them. `reconstruct` calls the model's own
+# normalized training-time formula (V(x) = sum w_i f_i / (sum w_i + eps)) —
+# used here (not the CUDA rasterisation kernels' per-Gaussian analytic MIP)
+# so mip_{xy,xz,yz}.png shows the blended, trained reconstruction rather
+# than individual unblended Gaussians ("rice grains"): a per-Gaussian max
+# can never blend overlapping Gaussians the way the normalized sum does.
 from reconstruct import (
     build_model,
     get_gaussian_data,
     load_checkpoint,
+    reconstruct,
     resolve_volume_shape,
 )
 
@@ -66,8 +77,9 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     """
     A --config TOML file (e.g. configs/config.toml's [rasterisation]
     section), if given, supplies defaults for the parameters listed in
-    gaussian_volume.config._CONFIG_TO_ARG; any of those parameters also
-    passed explicitly on the command line override the config value.
+    gaussian_volume.representation.config._CONFIG_TO_ARG; any of those
+    parameters also passed explicitly on the command line override the
+    config value.
     """
     if argv is None:
         argv = sys.argv[1:]
@@ -102,10 +114,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         "--gt-volume", type=Path, default=None,
         help=(
             "Ground-truth voxel volume (e.g. a processed_data/*.tif block) to also MIP-project "
-            "(plain max-projection, no Gaussians involved) for side-by-side comparison against "
-            "the rasterised MIPs, saved as gt_mip_{xy,xz,yz}.png. Defaults to the input volume "
-            "path stored in the checkpoint (extra.input_path), if present. Pass --no-gt-volume "
-            "to disable even when the checkpoint has one."
+            "(ray-marched max-projection, no Gaussians involved) for side-by-side comparison "
+            "against the rasterised MIPs, saved as gt_dvr_{xy,xz,yz}.png. Defaults to the input "
+            "volume path stored in the checkpoint (extra.input_path), if present. Pass "
+            "--no-gt-volume to disable even when the checkpoint has one."
         ),
     )
     parser.add_argument(
@@ -124,57 +136,22 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="Gaussian Mahalanobis cutoff radius. Default: 4.0.",
     )
     parser.add_argument(
-        "--depth-samples", type=int, default=32,
-        help="Accepted for API parity with the legacy CPU MIP fallback; unused by the CUDA kernel. Default: 32.",
-    )
-    parser.add_argument(
-        "--density-scale", type=float, default=None,
+        "--epsilon", type=float, default=1.0e-8,
         help=(
-            "MIP opacity mapping scale (1 - exp(-density_scale * accumulated_density)). "
-            "Default: auto-exposed per view so its brightest pixel reaches --target-opacity "
-            "(see --target-opacity/--reference-density-scale). Pass a value here to disable "
-            "auto-exposure and use it directly."
+            "Stability term in the normalized reconstruction's denominator "
+            "(V(x) = sum w_i f_i / (sum w_i + epsilon)), used for mip_{xy,xz,yz}.png. "
+            "Should match the value the checkpoint was trained with. Default: 1e-8."
         ),
-    )
-    parser.add_argument(
-        "--target-opacity", type=float, default=0.9,
-        help="Auto-exposure target: brightest pixel's opacity after rescaling. Default: 0.9.",
-    )
-    parser.add_argument(
-        "--reference-density-scale", type=float, default=1.0e-4,
-        help="density_scale used for the single auto-exposure probe launch. Default: 1e-4.",
-    )
-    parser.add_argument(
-        "--max-gauss-per-tile", type=int, default=0,
-        help="Cap Gaussians considered per screen tile (0 = unlimited). Default: 0.",
-    )
-    parser.add_argument(
-        "--screen-width", type=int, default=None,
-        help=(
-            "Independent MIP-projection output width, decoupled from the volume's own "
-            "voxel-grid dimensions (like a camera's screen resolution). Default: each of the "
-            "three orthogonal views matches the volume's own shape exactly (no downsampling). "
-            "Must be given together with --screen-height."
-        ),
-    )
-    parser.add_argument(
-        "--screen-height", type=int, default=None,
-        help="Independent MIP-projection output height; see --screen-width. Default: unset.",
     )
 
     parser.add_argument(
-        "--dvr-density-scale", type=float, default=None,
-        help=(
-            "Direct volume rendering (DVR) opacity mapping scale for the ground-truth "
-            "gt_dvr_{xy,xz,yz}.png (1 - exp(-dvr_density_scale * accumulated_density * "
-            "dvr_step_size)), front-to-back Beer-Lambert compositing along each axis. "
-            "Default: auto-exposed so its brightest pixel reaches --target-opacity, same as "
-            "--density-scale for the rasterised MIPs. Pass a value here to disable auto-exposure."
-        ),
-    )
-    parser.add_argument(
         "--dvr-step-size", type=float, default=1.0,
-        help="DVR ray-march step size in voxels. Default: 1.0.",
+        help=(
+            "Ray-march sample spacing in voxels for the ground-truth gt_dvr_{xy,xz,yz}.png "
+            "(a ray-marched, interpolated max-intensity projection — see "
+            "gaussian_volume.renderer.rasterisation.dvr_ground_truth). 1.0 samples once per "
+            "voxel; smaller values sample more densely between voxel centres. Default: 1.0."
+        ),
     )
 
     config: dict[str, Any] = {}
@@ -203,25 +180,11 @@ def validate_arguments(args: argparse.Namespace) -> None:
     if args.cutoff_sigma <= 0:
         raise ValueError(f"--cutoff-sigma must be positive, got {args.cutoff_sigma}.")
 
-    if args.density_scale is not None and args.density_scale <= 0:
-        raise ValueError(f"--density-scale must be positive, got {args.density_scale}.")
-
-    if not (0.0 < args.target_opacity < 1.0):
-        raise ValueError(f"--target-opacity must be in (0, 1), got {args.target_opacity}.")
-
-    if args.reference_density_scale <= 0:
-        raise ValueError(
-            f"--reference-density-scale must be positive, got {args.reference_density_scale}."
-        )
-
-    if args.dvr_density_scale is not None and args.dvr_density_scale <= 0:
-        raise ValueError(f"--dvr-density-scale must be positive, got {args.dvr_density_scale}.")
+    if args.epsilon <= 0:
+        raise ValueError(f"--epsilon must be positive, got {args.epsilon}.")
 
     if args.dvr_step_size <= 0:
         raise ValueError(f"--dvr-step-size must be positive, got {args.dvr_step_size}.")
-
-    if args.max_gauss_per_tile < 0:
-        raise ValueError(f"--max-gauss-per-tile cannot be negative, got {args.max_gauss_per_tile}.")
 
     supplied = (args.depth, args.height, args.width)
     supplied_count = sum(value is not None for value in supplied)
@@ -230,19 +193,12 @@ def validate_arguments(args: argparse.Namespace) -> None:
     if supplied_count == 3 and any(value <= 0 for value in supplied):
         raise ValueError("Output dimensions must all be positive.")
 
-    screen_supplied = (args.screen_width, args.screen_height)
-    screen_supplied_count = sum(value is not None for value in screen_supplied)
-    if screen_supplied_count not in (0, 2):
-        raise ValueError("--screen-width and --screen-height must either both be provided or both omitted.")
-    if screen_supplied_count == 2 and any(value <= 0 for value in screen_supplied):
-        raise ValueError("--screen-width and --screen-height must both be positive.")
-
 
 def find_input_path(checkpoint: dict[str, Any]) -> Path | None:
     """
     Look up the source volume path pipeline.py stored in the checkpoint
     (extra.input_path), if any — used to auto-locate a ground-truth
-    volume for gt_mip_{xy,xz,yz}.png without requiring --gt-volume.
+    volume for gt_dvr_{xy,xz,yz}.png without requiring --gt-volume.
     """
     extra = checkpoint.get("extra", {})
     input_path = extra.get("input_path") if isinstance(extra, dict) else None
@@ -293,24 +249,18 @@ def main() -> None:
         print(f"  Wrote {volume_path}  (min={volume.min().item():.4f} max={volume.max().item():.4f})")
 
     if args.mode in ("mips", "both"):
-        screen_size = (
-            (args.screen_height, args.screen_width)
-            if args.screen_width is not None
-            else None
-        )
-        if screen_size is not None:
-            print(f"  Screen size:         {screen_size[1]}x{screen_size[0]} (independent of volume shape)")
-
-        mips = render_orthogonal_mips(
-            model, volume_shape,
-            cutoff_sigma=args.cutoff_sigma,
-            screen_size=screen_size,
-            depth_samples=args.depth_samples,
-            density_scale=args.density_scale,
-            target_opacity=args.target_opacity,
-            reference_density_scale=args.reference_density_scale,
-            max_gauss_per_tile=args.max_gauss_per_tile,
-        )
+        # The model's own normalized reconstruction (same formula/CUDA
+        # extension training optimizes against), not the rasterisation
+        # kernels' per-Gaussian analytic max — blending overlapping
+        # Gaussians the way training actually does, instead of showing
+        # individual unblended Gaussians. Native volume resolution only
+        # (reconstruct.reconstruct has no independent screen-size concept).
+        normalized_volume = reconstruct(model, volume_shape, args.cutoff_sigma, args.epsilon)
+        mips = {
+            "xy": normalized_volume.amax(dim=0),
+            "xz": normalized_volume.amax(dim=1),
+            "yz": normalized_volume.amax(dim=2),
+        }
         for name, image in mips.items():
             mip_path = args.output_dir / f"mip_{name}.png"
             save_mip_png(mip_path, image)
@@ -335,25 +285,12 @@ def main() -> None:
                     f"checkpoint's volume_shape {volume_shape}."
                 )
 
-            # Always at the ground-truth volume's own native resolution — a
-            # plain max-projection, not resized to --screen-width/-height,
-            # so it stays a direct, unaltered look at the raw data.
-            gt_mips = render_orthogonal_mips_ground_truth(gt_volume)
-            for name, image in gt_mips.items():
-                gt_mip_path = args.output_dir / f"gt_mip_{name}.png"
-                save_mip_png(gt_mip_path, image)
-                print(
-                    f"  Wrote {gt_mip_path}  "
-                    f"(min={image.min().item():.6f} max={image.max().item():.6f})"
-                )
-
-            # Same native-resolution rule as gt_mip above.
+            # A ray-marched, interpolated max reduction (see
+            # gaussian_volume.renderer.rasterisation.dvr_ground_truth) —
+            # native resolution, matching mip_{xy,xz,yz}.png above.
             gt_dvrs = render_orthogonal_dvr_ground_truth(
                 gt_volume,
-                density_scale=args.dvr_density_scale,
                 step_size=args.dvr_step_size,
-                target_opacity=args.target_opacity,
-                reference_density_scale=args.reference_density_scale,
             )
             for name, image in gt_dvrs.items():
                 gt_dvr_path = args.output_dir / f"gt_dvr_{name}.png"

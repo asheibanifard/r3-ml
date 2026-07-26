@@ -1,4 +1,4 @@
-# gaussian_volume/training.py
+# gaussian_volume/representation/training.py
 
 from __future__ import annotations
 

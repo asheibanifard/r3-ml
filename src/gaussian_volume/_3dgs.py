@@ -108,13 +108,17 @@ def _find_cuda_include() -> list:
 def _load_eval_kernel():
     """Lazily compile and cache 3dgs_eval_cuda (reconstruct_volume + splat_mip).
 
-    Sources live in csrc/eval/: common.cuh (shared host helpers),
-    reconstruct_volume.cu, splat_mip.cu (one kernel + entry point each), and
-    bindings.cpp (pybind11 module definition only).
+    Sources live in renderer/ (shared with gaussian_volume.renderer's own
+    JIT extension, gaussian_volume_rasterisation_cuda, which compiles the
+    same files under a different extension name/build config — no
+    conflict, just two separate compiled artifacts from one source tree):
+    common.cuh (shared host helpers), reconstruct_volume.cu, splat_mip.cu
+    (one kernel + entry point each), and bindings.cpp (pybind11 module
+    definition only).
     """
     global _eval_cuda
     if _eval_cuda is None:
-        csrc_dir = Path(__file__).parent / "csrc" / "eval"
+        csrc_dir = Path(__file__).parent / "renderer"
         sources = [
             csrc_dir / "reconstruct_volume.cu",
             csrc_dir / "splat_mip.cu",

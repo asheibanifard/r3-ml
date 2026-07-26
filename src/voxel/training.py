@@ -20,7 +20,7 @@ from .model import SirenVoxelField
 from .rendering import compute_volume_psnr
 
 # Every checkpoint's companion visualization is rendered at this resolution
-# (matches gaussian_volume/training.py's convention, so both pipelines'
+# (matches gaussian_volume/representation/training.py's convention, so both pipelines'
 # checkpoint directories are visually comparable at a glance).
 CHECKPOINT_FIGURE_DPI = 800
 
@@ -121,7 +121,7 @@ def train_impl(
     iterations (always including iteration 1 and the final iteration), and
     a last.pth snapshot at the end. Every .pth also gets a matching .pdf
     (axial/coronal/sagittal reconstruction-vs-ground-truth-vs-diff grid),
-    mirroring gaussian_volume/training.py's checkpoint visualizations.
+    mirroring gaussian_volume/representation/training.py's checkpoint visualizations.
 
     learning_rate is a base LR shaped by cosine_lr_schedule (linear warmup
     over lr_warmup_steps, then cosine annealing to lr_min_ratio *

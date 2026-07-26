@@ -343,22 +343,17 @@ metrics_every = 100
 
 [rasterisation]
 
-# Projection resolution is independent of the reconstructed voxel-grid shape.
-# Omit these values to match each orthogonal view to the corresponding volume
-# dimensions.
-screen_width = 512
-screen_height = 512
-
-# Ground-truth direct volume rendering uses front-to-back Beer-Lambert
-# compositing along each axis.
+# Ground-truth "DVR" is a ray-marched Maximum Intensity Projection (max
+# reduction, not Beer-Lambert compositing, despite the name -- see
+# gaussian_volume.renderer.rasterisation.dvr_ground_truth). dvr_step_size
+# is the ray-march sample spacing in voxels: 1.0 samples once per voxel,
+# smaller values sample more densely between voxel centres.
 #
-# Leave dvr_density_scale unset to use automatic exposure.
-# dvr_density_scale = 5.0
+# Both this and the Gaussian-rasterised MIPs (splat_mip) are now true
+# max reductions, needing no opacity mapping / auto-exposure -- unlike
+# earlier versions of this config, there is no density_scale/
+# target_opacity/reference_density_scale here anymore.
 dvr_step_size = 1.0
-
-# Shared by Gaussian MIPs and automatic exposure of ground-truth DVR images.
-target_opacity = 0.9
-reference_density_scale = 1e-4
 
 
 # ── Output ────────────────────────────────────────────────────────────────────

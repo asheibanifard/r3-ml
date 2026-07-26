@@ -1,4 +1,4 @@
-# scripts/gaussian/pipeline.py
+# scripts/gaussian/representation/pipeline.py
 #
 # Thin CLI orchestrator over src/gaussian_volume/. Each stage below calls
 # into exactly one package module, following:

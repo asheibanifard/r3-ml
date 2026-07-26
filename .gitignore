@@ -105,11 +105,11 @@ dataset/smoke_data/
 ckpt/
 
 # New src-layout: compiled CUDA binaries + render/reconstruction output dumps
-src/voxel_volume/main
-src/voxel_volume/siren_voxel
-src/voxel_volume/output/
-scripts/voxel_rasteriser/main
-scripts/voxel_rasteriser/output/
+src/voxel/main
+src/voxel/siren_voxel
+src/voxel/output/
+scripts/voxel/main
+scripts/voxel/output/
 
 # Environment / secrets
 .env

@@ -13,10 +13,10 @@ Evaluate explicit image paths:
     python3 evaluate.py --gt output/gt_projection.pgm \
                         --pred output/pred_projection.pgm
 
-Evaluate the raw 3D volumes directly (more exact than the rendered
-projection above — compares every voxel, not one rendered view):
-    python3 evaluate.py --gt output/ground_truth_volume_f32.raw \
-                        --pred output/reconstructed_volume_f32.raw
+Evaluate the 3D volumes directly (more exact than the rendered projection
+above — compares every voxel, not one rendered view):
+    python3 evaluate.py --gt output/ground_truth_volume.tif \
+                        --pred output/reconstructed_volume.tif
 """
 
 from __future__ import annotations
@@ -46,12 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gt",
         type=Path,
-        help="Explicit ground-truth path: an image, or a raw float32 volume (.raw)",
+        help="Explicit ground-truth path: a rendered image, or a 3D volume (.tif/.raw)",
     )
     parser.add_argument(
         "--pred",
         type=Path,
-        help="Explicit predicted path: an image, or a raw float32 volume (.raw)",
+        help="Explicit predicted path: a rendered image, or a 3D volume (.tif/.raw)",
     )
     parser.add_argument(
         "--run",
@@ -77,16 +77,16 @@ def parse_args() -> argparse.Namespace:
         "--volume",
         type=Path,
         help=(
-            "Raw ground-truth voxel volume, for the compression-rate metric. "
-            "Defaults to <output-dir>/ground_truth_volume_f32.raw."
+            "Ground-truth voxel volume, for the compression-rate metric. "
+            "Defaults to <output-dir>/ground_truth_volume.tif."
         ),
     )
     parser.add_argument(
         "--checkpoint",
         type=Path,
         help=(
-            "SIREN parameter checkpoint (init.bin/best.bin/last.bin/<iter>.bin), "
-            "for the compression-rate metric. Defaults to <output-dir>/best.bin."
+            "SIREN parameter checkpoint (init.pth/best.pth/last.pth/<iter>.pth), "
+            "for the compression-rate metric. Defaults to <output-dir>/best.pth."
         ),
     )
     return parser.parse_args()
@@ -143,11 +143,13 @@ def load_image(path: Path) -> np.ndarray:
 
 def load_raw_volume(path: Path) -> np.ndarray:
     """
-    Load a flat float32 voxel dump written by main.cu's save_raw_volume
-    (e.g. ground_truth_volume_f32.raw / reconstructed_volume_f32.raw) and
-    reshape it back into a [D,H,W] cube. The grid size is inferred from the
-    file's element count rather than hardcoded, so it stays correct if
-    GRID_SIZE in main.cu ever changes.
+    Load a legacy flat float32 voxel dump (main.cu's original save_raw_volume
+    format, e.g. ground_truth_volume_f32.raw) and reshape it back into a
+    [D,H,W] cube. The grid size is inferred from the file's element count
+    rather than hardcoded, so it stays correct regardless of grid size.
+
+    New runs write .tif volumes instead (see load_tiff_volume) — this
+    remains only to read old .raw dumps.
     """
 
     if not path.exists():
@@ -165,14 +167,35 @@ def load_raw_volume(path: Path) -> np.ndarray:
     return flat.reshape(grid_size, grid_size, grid_size)
 
 
+def load_tiff_volume(path: Path) -> np.ndarray:
+    """
+    Load a [D,H,W] float32 volume written by voxel.io.save_volume
+    (e.g. ground_truth_volume.tif / reconstructed_volume.tif).
+    """
+    import tifffile
+
+    if not path.exists():
+        raise FileNotFoundError(f"TIFF volume not found: {path}")
+
+    array = tifffile.imread(path)
+    if array.ndim != 3:
+        raise ValueError(f"{path} must be a 3D [D,H,W] volume, got shape {array.shape}.")
+
+    return array.astype(np.float32)
+
+
 def load_array(path: Path) -> tuple[np.ndarray, bool]:
     """
-    Load either an image (any PIL-readable format) or a raw float32 volume
-    (.raw), dispatching on file extension. Returns (array, is_volume).
+    Load either a rendered image (any PIL-readable format), a .tif 3D
+    volume, or a legacy raw float32 volume (.raw), dispatching on file
+    extension. Returns (array, is_volume).
     """
 
     if path.suffix.lower() == ".raw":
         return load_raw_volume(path), True
+
+    if path.suffix.lower() in (".tif", ".tiff"):
+        return load_tiff_volume(path), True
 
     return load_image(path), False
 
@@ -312,8 +335,8 @@ def main() -> int:
 
     gt_path = args.gt or (args.output_dir / "gt_projection.pgm")
     pred_path = args.pred or (args.output_dir / "pred_projection.pgm")
-    volume_path = args.volume or (args.output_dir / "ground_truth_volume_f32.raw")
-    checkpoint_path = args.checkpoint or (args.output_dir / "best.bin")
+    volume_path = args.volume or (args.output_dir / "ground_truth_volume.tif")
+    checkpoint_path = args.checkpoint or (args.output_dir / "best.pth")
 
     gt, gt_is_volume = load_array(gt_path)
     pred, pred_is_volume = load_array(pred_path)

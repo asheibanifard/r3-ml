@@ -46,17 +46,17 @@ swc_init:   false     # --no_swc_init: EM blocks have no SWC skeletons to init f
 no_wandb:   true
 
 # ── Gaussian cloud ──────────────────────────────────────────────────────────────
-n_init:        1000       # unchanged from v16
-max_gaussians: 10000      # non-binding -- population controlled by the throttle below
+n_init:        10000       # unchanged from v16
+max_gaussians: 50000      # non-binding -- population controlled by the throttle below
 
 # ── Training schedule ────────────────────────────────────────────────────────────
 epochs:          500      # unchanged from v16
 steps_per_epoch: 50       # unchanged -- total steps = 25000
 
 # ── Densification (clone / split / prune) -- structural, not a loss term ──────
-densify_from_step:  500     # epoch 10  (unchanged from v16)
+densify_from_step:  250     # epoch 5  (unchanged from v16)
 densify_until_step: 20000   # epoch 400 (unchanged from v16)
-prune_inten_thresh: 0.01    # unchanged from v16
+prune_inten_thresh: 0.009    # unchanged from v16
 densify_thresh_population_exponent: 0.8   # unchanged from v16 -- v16 alone
                                             # got N=30,673/vol_PSNR=34.76dB
 

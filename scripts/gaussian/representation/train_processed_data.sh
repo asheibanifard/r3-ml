@@ -38,7 +38,7 @@ for input_file in "$DATA_DIR"/*.tif; do
 
     echo "[${block_name}] training from ${input_file}"
 
-    "$PYTHON" scripts/gaussian/pipeline.py \
+    "$PYTHON" scripts/gaussian/representation/pipeline.py \
         --config "$CONFIG" \
         "$input_file" \
         --output "$block_output_dir" \

@@ -3,54 +3,54 @@
 #
 # Reconstruction:
 #
-#              Σ_i w_i(x) f_i
-#   V(x) = -----------------------
-#              Σ_i w_i(x) + ε
+#              sum_i w_i(x) f_i
+#   V(x) = -------------------------
+#              sum_i w_i(x) + eps
 #
 # Loss:
 #
-#   L = 0.7 L1 + 0.3 (1 - SSIM)
+#   L = 0.7 * L1 + 0.3 * (1 - SSIM)
 #
-# No additional loss regularizers are used.
+# No additional loss regularizers are enabled.
 #
 # Example:
 #
-# python scripts/train.py \
-#     --config configs/fafb_v18.toml \
-#     data/fafb/blocks/image_z32_y31_x31.tif \
-#     --output outputs/fafb_v18/b_211 \
-#     --save-volume outputs/fafb_v18/b_211/reconstruction.tif
+#   python scripts/train.py \
+#       --config configs/fafb_v18.toml \
+#       data/fafb/blocks/image_z32_y31_x31.tif \
+#       --output outputs/fafb_v18/b_211 \
+#       --save-volume outputs/fafb_v18/b_211/reconstruction.tif
 
 
-# ── Experiment ─────────────────────────────────────────────────────────────────
+# ── Experiment ────────────────────────────────────────────────────────────────
 
 [experiment]
 
 name = "fafb_real_data_pilot"
 version = 18
-description = "Normalized Gaussian reconstruction with L1 and 3D SSIM"
+description = "Normalized 3D Gaussian reconstruction with L1 and 3D SSIM"
 seed = 42
 
 
-# ── Input ──────────────────────────────────────────────────────────────────────
+# ── Input ─────────────────────────────────────────────────────────────────────
 
 [input]
 
-# Can be overridden with --input.
+# May be overridden by the positional input argument or --input.
 path = "data/fafb/blocks/image_z32_y31_x31.tif"
 
-# Used for container formats such as HDF5 and NPZ.
+# Used only for container formats such as HDF5 and NPZ.
 dataset = "image"
 
-# Normalize the input volume to [0,1].
+# Normalize target intensities to [0,1].
 normalize = true
 
-# Optional fixed normalization range.
+# Optional fixed input range. Leave unset to infer it from the input.
 # normalization_minimum = 0.0
 # normalization_maximum = 255.0
 
 
-# ── Runtime ────────────────────────────────────────────────────────────────────
+# ── Runtime ───────────────────────────────────────────────────────────────────
 
 [runtime]
 
@@ -63,28 +63,33 @@ verbose_cuda_build = false
 no_wandb = true
 flat_out = true
 
-# FAFB blocks do not use SWC-based initialization.
+# FAFB EM blocks do not use SWC-based initialization.
 swc_init = false
 
 
-# ── Gaussian model ─────────────────────────────────────────────────────────────
+# ── Gaussian model ────────────────────────────────────────────────────────────
 
 [model]
 
 n_init = 10000
-max_gaussians = 10000
 
-# Initial standard deviation in voxel units.
+# Global hard population limit. This must agree with
+# densification.max_gaussians.
+max_gaussians = 75000
+
+# Initial standard deviation and confidence.
+# initial_scale is specified in voxel units and must be converted internally
+# if the Gaussian kernel stores coordinates and scales in normalized units.
 initial_scale = 2.0
 initial_confidence = 1.0
 
-# Ignore contributions beyond this Mahalanobis radius.
+# Ignore Gaussian contributions beyond this Mahalanobis radius.
 cutoff_sigma = 4.0
 
-# Denominator stability term.
+# Stability term in the normalized reconstruction denominator.
 epsilon = 1e-8
 
-# Restrict trainable intensity features to the normalized data range.
+# Keep trainable intensity features in the normalized target range.
 constrain_features = true
 feature_min = 0.0
 feature_max = 1.0
@@ -93,17 +98,20 @@ minimum_scale = 1e-3
 minimum_confidence = 1e-6
 
 # Hard architectural scale limit, not a loss regularizer.
+# This value is in normalized coordinate units. The implementation must compare
+# it with internally normalized scales—not directly with initial_scale in voxel
+# units. For a 64-voxel axis mapped to [-1,1], 0.15 is approximately 4.7 voxels.
 scale_max_hard = 0.15
 
 
-# ── Initialization ─────────────────────────────────────────────────────────────
+# ── Initialization ────────────────────────────────────────────────────────────
 
 [initialization]
 
 # Options: intensity_weighted, uniform, grid, top_intensity.
 strategy = "intensity_weighted"
 
-# Mix uniform samples with intensity-weighted samples.
+# Mix uniform positions with intensity-weighted positions.
 uniform_sample_fraction = 0.3
 intensity_power = 1.0
 minimum_sampling_weight = 1e-6
@@ -119,14 +127,14 @@ sample_features_from_target = true
 identity_rotation = true
 
 
-# ── Training ───────────────────────────────────────────────────────────────────
+# ── Training ──────────────────────────────────────────────────────────────────
 
 [training]
 
 epochs = 500
 steps_per_epoch = 50
 
-# Must normally equal epochs * steps_per_epoch.
+# Must equal epochs * steps_per_epoch.
 iterations = 25000
 
 # Reconstruct the complete volume at every optimization step.
@@ -136,7 +144,7 @@ clamp_means = true
 mean_clamp_margin = 0.0
 
 
-# ── Optimizer ──────────────────────────────────────────────────────────────────
+# ── Optimizer ─────────────────────────────────────────────────────────────────
 
 [optimizer]
 
@@ -155,7 +163,7 @@ beta2 = 0.999
 epsilon = 1e-8
 
 
-# ── Learning-rate schedule ─────────────────────────────────────────────────────
+# ── Learning-rate schedule ────────────────────────────────────────────────────
 
 [scheduler]
 
@@ -166,22 +174,27 @@ minimum_lr_ratio = 0.05
 warmup_steps = 0
 
 
-# ── Reconstruction loss ────────────────────────────────────────────────────────
+# ── Reconstruction loss ───────────────────────────────────────────────────────
 
 [loss]
 
-# total = l1_weight * L1 + ssim_weight * (1 - SSIM)
+# Entire optimization objective:
+#
+#   total = l1_weight * L1 + ssim_weight * (1 - SSIM)
 l1_weight = 0.7
 ssim_weight = 0.3
 
 data_range = 1.0
+
+# These parameters assume spatial 3D SSIM over an ordered voxel volume or
+# ordered 3D patches—not SSIM over an unordered set of sampled voxels.
 ssim_window_size = 11
 ssim_sigma = 1.5
 
 gradient_weight = 0.0
 
 
-# ── Disabled regularizers ──────────────────────────────────────────────────────
+# ── Disabled regularizers ─────────────────────────────────────────────────────
 
 [regularization]
 
@@ -197,53 +210,76 @@ overlap = 0.0
 gradient = 0.0
 
 
-# ── Densification ──────────────────────────────────────────────────────────────
+# ── Densification ─────────────────────────────────────────────────────────────
 
 [densification]
 
 enabled = true
 
+# With 50 steps per epoch, step 500 is the beginning of epoch 10.
 from_step = 500
+
+# Stop at epoch 400, leaving 5,000 optimization steps for final convergence.
 until_step = 20000
 
-# Evaluated twice as often as the original 100 (see max_new_gaussians below
-# for why this is safe), so the population can compound faster.
-interval = 50
+# Evaluate densification twice per epoch (was 50 = once per epoch) so
+# qualifying Gaussians clone/split sooner instead of waiting a full epoch.
+interval = 25
 
-# Base threshold for the mean-gradient magnitude. 2e-4 (copied from
-# 3dgs.yml, tuned for the unnormalized GaussianCloud model in _3dgs.py) was
-# above the max mean-gradient norm ever observed here (measured ~1.5e-4 at
-# n_init=1000 on processed_data/complex_...) -- this model's normalized
-# V(x) = sum(w_i f_i)/sum(w_i) reconstruction divides gradients down by the
-# per-voxel weight total, so mean-gradients run smaller than in the
-# unnormalized model that threshold was tuned for. Densification never
-# fired as a result, and pruning alone shrank the population while scale
-# and confidence inflated to compensate -- PSNR peaked early then degraded.
-# Empirically measured selection fraction at n_init=1000 by threshold:
-#   1e-4 -> 1.9%   8e-5 -> 4.7%   6e-5 -> 10.0%   5e-5 -> 15.3%
-#   4e-5 -> 25.0%  3e-5 -> 40.6%  2.5e-5 -> 49.3%
-# 3e-5 selects ~40% per event -- more aggressive than the initial 5e-5 fix
-# (~15%), while staying well above the ~1e-6 noise floor.
-gradient_threshold = 3e-5
-
-# Increase the threshold as the Gaussian population grows:
+# Base threshold for the accumulated mean-gradient magnitude.
 #
-# effective_threshold =
-#     gradient_threshold
-#     * (current_count / initial_count) ^ population_exponent
+# The earlier value of 2e-4 exceeded the observed maximum mean-gradient norm
+# (approximately 1.5e-4) in the normalized reconstruction, so no Gaussians
+# qualified. A measured n_init=1000 run produced approximately:
 #
-# Lowered from 0.8: a smaller exponent brakes more slowly as N grows, so
-# growth keeps compounding for longer before self-limiting.
-population_exponent = 0.5
+#   threshold  selected
+#   1.0e-4       1.9%
+#   8.0e-5       4.7%
+#   6.0e-5      10.0%
+#   5.0e-5      15.3%
+#   4.0e-5      25.0%
+#   3.0e-5      40.6%
+#   2.5e-5      49.3%
+#
+# These percentages are diagnostic measurements, not guaranteed selection
+# rates for the 10,000-Gaussian run. Lowered well below the measured range
+# (was 3e-5, then 1.5e-5) so nearly every Gaussian qualifies as a candidate
+# each event -- max_new_gaussians below is now the real limiter on growth
+# rate, not this threshold. Watch the candidate-count log (see [logging]
+# below) and raise this back up if growth becomes unstable.
+gradient_threshold = 7.5e-6
 
-# Clone smaller Gaussians and split larger Gaussians.
+# Population-dependent threshold:
+#
+#   effective_threshold =
+#       gradient_threshold
+#       * (current_count / initial_count) ^ population_exponent
+#
+# For initial_count=10,000, gradient_threshold=7.5e-6, and
+# population_exponent=0.3 (was 0.5 -- the shallower exponent lets the
+# threshold rise more slowly as the population grows, so aggressive growth
+# is sustained for longer before the throttle kicks in):
+#
+#   current_count   effective_threshold
+#        10,000          7.50e-6
+#        20,000          9.23e-6
+#        30,000          1.04e-5
+#        40,000          1.14e-5
+#        50,000          1.22e-5
+#        75,000          1.37e-5
+population_exponent = 0.3
+
+# Clone compact Gaussians and split larger Gaussians. These thresholds must use
+# the same scale convention as the values inspected by the densification code.
 clone_scale_threshold = 2.0
 split_scale_threshold = 2.0
 
-# Raised from 1000 to accommodate the larger candidate pools that the lower
-# gradient_threshold and shorter interval now produce each event.
-max_new_gaussians = 2000
-max_gaussians = 50000
+# Limit growth at each densification event and globally. max_new_gaussians
+# raised from 2000 so each event admits more clones/splits; max_gaussians
+# raised to match model.max_gaussians above, so the higher per-event cap
+# isn't immediately capped by the old global ceiling.
+max_new_gaussians = 4000
+max_gaussians = 75000
 
 clone_jitter_fraction = 0.25
 clone_confidence_fraction = 0.5
@@ -255,7 +291,7 @@ split_scale_factor = 0.7
 minimum_confidence = 1e-4
 
 
-# ── Pruning ────────────────────────────────────────────────────────────────────
+# ── Pruning ───────────────────────────────────────────────────────────────────
 
 [pruning]
 
@@ -275,15 +311,15 @@ minimum_scale = 1e-3
 remove_outside_volume = true
 outside_margin = 0.0
 
-# Preserve at least this many Gaussians.
+# Never prune below this population.
 minimum_gaussians = 64
 
-# Ranking weights used when too many Gaussians qualify for pruning.
+# Ranking weights used when more Gaussians qualify than may be pruned.
 confidence_score_weight = 1.0
 feature_score_weight = 1.0
 
 
-# ── Logging and checkpoints ────────────────────────────────────────────────────
+# ── Logging and checkpoints ───────────────────────────────────────────────────
 
 [logging]
 
@@ -295,21 +331,47 @@ checkpoint_every = 500
 compute_psnr = true
 compute_ssim = true
 
-# Avoid computing expensive full-volume metrics every iteration.
+# Avoid expensive full-volume metric computation every iteration.
 metrics_every = 100
 
+# The training code should additionally log the base/effective densification
+# thresholds, gradient statistics, candidate count, clone/split/prune counts,
+# and population before and after every structural update.
 
-# ── Output ─────────────────────────────────────────────────────────────────────
+
+# ── Rasterisation ─────────────────────────────────────────────────────────────
+
+[rasterisation]
+
+# Projection resolution is independent of the reconstructed voxel-grid shape.
+# Omit these values to match each orthogonal view to the corresponding volume
+# dimensions.
+screen_width = 512
+screen_height = 512
+
+# Ground-truth direct volume rendering uses front-to-back Beer-Lambert
+# compositing along each axis.
+#
+# Leave dvr_density_scale unset to use automatic exposure.
+# dvr_density_scale = 5.0
+dvr_step_size = 1.0
+
+# Shared by Gaussian MIPs and automatic exposure of ground-truth DVR images.
+target_opacity = 0.9
+reference_density_scale = 1e-4
+
+
+# ── Output ────────────────────────────────────────────────────────────────────
 
 [output]
 
-# The CLI --output argument should normally override this directory.
+# The CLI --output argument normally overrides this location.
 checkpoint = "outputs/"
 
 reconstruction = "outputs/fafb_v18/b_211/reconstruction.tif"
 history = "outputs/fafb_v18/b_211/history.json"
 
-# Keep the saved reconstruction in normalized [0,1] form.
+# Preserve the saved volume in normalized [0,1] form.
 denormalize_reconstruction = false
 
 save_intermediate_volumes = false

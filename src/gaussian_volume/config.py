@@ -11,9 +11,10 @@ except ModuleNotFoundError:  # Python < 3.11
     import tomli as tomllib  # type: ignore[no-redef]
 
 # Maps (toml section, toml key) -> argparse dest name, for every config value
-# that has a corresponding CLI parameter in scripts/gaussian/pipeline.py.
-# Config values fill in the parameter defaults; explicit CLI flags always
-# take precedence.
+# that has a corresponding CLI parameter in
+# scripts/gaussian/representation/pipeline.py or
+# scripts/gaussian/rendering/rasterise.py. Config values fill in the
+# parameter defaults; explicit CLI flags always take precedence.
 _CONFIG_TO_ARG: dict[tuple[str, str], str] = {
     ("experiment", "seed"): "seed",
     ("input", "path"): "input",
@@ -35,6 +36,18 @@ _CONFIG_TO_ARG: dict[tuple[str, str], str] = {
     ("output", "reconstruction"): "save_volume",
     ("logging", "checkpoint_every"): "checkpoint_every",
     ("logging", "log_every"): "log_every",
+    # rasterise.py: independent MIP-projection output resolution, decoupled
+    # from the volume's own voxel-grid dimensions (None/unset -> each view
+    # matches the volume's own shape, no downsampling).
+    ("rasterisation", "screen_width"): "screen_width",
+    ("rasterisation", "screen_height"): "screen_height",
+    # rasterise.py: ground-truth direct volume rendering (DVR) parameters.
+    ("rasterisation", "dvr_density_scale"): "dvr_density_scale",
+    ("rasterisation", "dvr_step_size"): "dvr_step_size",
+    # rasterise.py: shared auto-exposure target for both the rasterised
+    # MIPs and the ground-truth DVR (when their density_scale is unset).
+    ("rasterisation", "target_opacity"): "target_opacity",
+    ("rasterisation", "reference_density_scale"): "reference_density_scale",
 }
 
 # Destinations that hold filesystem paths in the config, and so need

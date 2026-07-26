@@ -1,0 +1,60 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# SIREN voxel field — processed_data/ batch training config
+#
+# Tuned defaults for scripts/voxel/representation/train.py when fitting the
+# small 64^3 EM blocks under processed_data/ (see
+# scripts/voxel/representation/train_processed_data.sh), as opposed to the
+# much larger 512^3 synthetic sphere/torus/blob demo (grid_size/image
+# dimensions there are sized for a standalone renderer benchmark, not a
+# batch fit).
+#
+# --volume/--out/--save-volume are intentionally left out of this file:
+# they're per-block paths supplied by the calling script, not tuned
+# hyperparameters.
+#
+# Usage (single block):
+#   /venv/r3-ml/bin/python3 scripts/voxel/representation/train.py \
+#     --config configs/siren.yml \
+#     --volume processed_data/complex_image_z14_y11_x17.tif \
+#     --out    ckpt/voxel/complex_image_z14_y11_x17
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Training schedule ───────────────────────────────────────────────────────
+iterations:  20000
+learning_rate: 0.001
+checkpoint_every: 500
+seed: 1234
+
+# ── Learning-rate schedule ──────────────────────────────────────────────────
+# Linear warmup over the first lr_warmup_steps iterations (from
+# lr_warmup_init_factor * learning_rate up to learning_rate), then cosine
+# annealing down to lr_min_ratio * learning_rate by the final iteration.
+# lr_min_ratio: 1.0 would disable decay (constant learning_rate throughout).
+lr_min_ratio: 0.05
+lr_warmup_steps: 200
+lr_warmup_init_factor: 0.1
+
+# ── SIREN architecture ──────────────────────────────────────────────────────
+# hidden_size/hidden_layers are compile-time for the CUDA extension (see
+# extension/loader.py) — changing either triggers a one-time JIT recompile.
+hidden_size: 64
+hidden_layers: 2
+train_batch: 4096
+
+# first_omega_0/hidden_omega_0 (SIREN paper defaults: 30.0/1.0) control
+# frequency sensitivity — higher values fit finer detail but can destabilize
+# training; reconstruct.py must be given the same values used here.
+first_omega_0: 30.0
+hidden_omega_0: 1.0
+
+# ── Renderer (used only for the static comparison image + optional orbit/
+# benchmark output, not for fitting itself) ─────────────────────────────────
+image_width: 256
+image_height: 256
+dvr_steps: 384
+density_scale: 8.0
+
+# Batch fits over many blocks skip orbit videos and keep the FPS benchmark
+# short; run train.py directly with larger values for a demo-quality render.
+orbit_frames: 0
+benchmark_frames: 100

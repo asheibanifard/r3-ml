@@ -3,3 +3,4 @@ Pillow
 matplotlib
 torch
 lpips
+PyYAML

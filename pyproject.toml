@@ -15,4 +15,4 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["gaussian_volume*"]
+include = ["gaussian_volume*", "voxel*"]

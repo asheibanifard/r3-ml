@@ -1,0 +1,40 @@
+[experiment]
+seed = 42
+output_dir = "outputs/synthetic64"
+
+[volume]
+depth = 64
+height = 64
+width = 64
+
+[model]
+n_gaussians = 1024
+initial_scale = 2.5
+minimum_scale = 0.20
+maximum_scale = 8.0
+initial_confidence = 1.0
+epsilon = 1e-8
+cutoff_sigma = 4.0
+
+[training]
+iterations = 2000
+patch_size = 16
+patches_per_step = 2
+l1_weight = 0.7
+ssim_weight = 0.3
+ssim_window_size = 7
+ssim_sigma = 1.2
+log_every = 50
+checkpoint_every = 500
+
+[optimizer]
+mean_lr = 2e-3
+scale_lr = 2e-3
+rotation_lr = 1e-3
+confidence_lr = 1e-3
+feature_lr = 5e-3
+
+[reconstruction]
+voxel_chunk = 4096
+gaussian_chunk = 512
+backend = "jit"

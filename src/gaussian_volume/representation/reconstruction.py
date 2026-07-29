@@ -1,4 +1,29 @@
-# gaussian_volume/representation/reconstruction.py
+"""
+Volume reconstruction from anisotropic 3D Gaussian mixtures.
+
+This module provides both CUDA-accelerated and pure-PyTorch implementations of
+Gaussian volume reconstruction:
+
+    V(x) = Σᵢ wᵢ(x) · fᵢ / (Σᵢ wᵢ(x) + ε)
+    wᵢ(x) = confidenceᵢ · exp(-0.5 · (x - μᵢ)ᵀ Qᵢ (x - μᵢ))
+
+where:
+- wᵢ(x): Gaussian weight at point x (exponential decay from mean)
+- fᵢ: Feature value (intensity/color) of Gaussian i
+- Qᵢ: Precision matrix (inverse covariance)
+- ε: Numerical stability constant
+
+Key components:
+- `reconstruct_volume()`: Fast CUDA-accelerated reconstruction (default).
+- `reconstruct_volume_reference()`: Pure-PyTorch reference (CPU-compatible, slower).
+- `_GaussianVolumeFunction`: Autograd wrapper for CUDA kernel with gradient support.
+- Input validation and shape handling.
+
+Both implementations support:
+- Cutoff distance: Ignore Gaussians beyond cutoff_sigma standard deviations.
+- Differentiability: Full gradient support for training.
+- Arbitrary output shapes: Reconstruct at any resolution.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +42,39 @@ def _validate_tensor(
     name: str,
     shape_suffix: tuple[int, ...],
     ndim: int,
+    require_cuda: bool = True,
 ) -> None:
+    """
+    Validate tensor for reconstruction operations.
+
+    Checks:
+    - Is a torch.Tensor
+    - Has exactly ndim dimensions
+    - Ends with expected shape (e.g., last dim is 3 for 3D vectors)
+    - Optionally requires GPU (CUDA) for kernel-based reconstruction
+    - Is float32 precision
+
+    Parameters
+    ----------
+    tensor : Tensor
+        Tensor to validate.
+    name : str
+        Tensor name for error messages.
+    shape_suffix : tuple[int, ...]
+        Expected trailing shape dimensions (e.g., (3,) for 3D vectors).
+    ndim : int
+        Expected total number of dimensions.
+    require_cuda : bool
+        If True, tensor must be on GPU (for CUDA kernel path).
+        If False, tensor can be on CPU or GPU (for pure-PyTorch path).
+
+    Raises
+    ------
+    TypeError
+        If tensor is not a torch.Tensor.
+    ValueError
+        If shape or device/dtype requirements are not met.
+    """
     if not isinstance(tensor, Tensor):
         raise TypeError(f"{name} must be a torch.Tensor.")
 
@@ -32,7 +89,7 @@ def _validate_tensor(
             f"got {tuple(tensor.shape)}."
         )
 
-    if not tensor.is_cuda:
+    if require_cuda and not tensor.is_cuda:
         raise ValueError(f"{name} must be a CUDA tensor.")
 
     if tensor.dtype != torch.float32:
@@ -44,11 +101,45 @@ def _validate_inputs(
     precision6: Tensor,
     confidences: Tensor,
     features: Tensor,
+    require_cuda: bool = True,
 ) -> None:
-    _validate_tensor(means, name="means", shape_suffix=(3,), ndim=2)
-    _validate_tensor(precision6, name="precision6", shape_suffix=(6,), ndim=2)
-    _validate_tensor(confidences, name="confidences", shape_suffix=(), ndim=1)
-    _validate_tensor(features, name="features", shape_suffix=(), ndim=1)
+    """
+    Validate all Gaussian parameters for reconstruction.
+
+    Checks:
+    - All tensors are float32
+    - All tensors on same device (CPU or GPU)
+    - All tensors have consistent Gaussian count N
+    - means: [N, 3]
+    - precision6: [N, 6] (compact symmetric matrices)
+    - confidences: [N]
+    - features: [N]
+
+    Parameters
+    ----------
+    means : Tensor
+        Gaussian centers, shape [N, 3].
+    precision6 : Tensor
+        Compact precision matrices, shape [N, 6].
+    confidences : Tensor
+        Gaussian weights, shape [N].
+    features : Tensor
+        Feature values, shape [N].
+    require_cuda : bool
+        If True, all tensors must be CUDA (for CUDA kernel path).
+        If False, tensors can be CPU or CUDA (for pure-PyTorch reference).
+
+    Raises
+    ------
+    TypeError
+        If any tensor is not torch.Tensor.
+    ValueError
+        If shapes or device/dtype don't match.
+    """
+    _validate_tensor(means, name="means", shape_suffix=(3,), ndim=2, require_cuda=require_cuda)
+    _validate_tensor(precision6, name="precision6", shape_suffix=(6,), ndim=2, require_cuda=require_cuda)
+    _validate_tensor(confidences, name="confidences", shape_suffix=(), ndim=1, require_cuda=require_cuda)
+    _validate_tensor(features, name="features", shape_suffix=(), ndim=1, require_cuda=require_cuda)
 
     n = means.shape[0]
     if precision6.shape[0] != n:
@@ -58,8 +149,26 @@ def _validate_inputs(
     if features.shape[0] != n:
         raise ValueError("features must have the same N as means.")
 
+    # Verify all tensors are on the same device
+    devices = {t.device for t in (means, precision6, confidences, features)}
+    if len(devices) > 1:
+        raise ValueError("All tensors must be on the same device.")
+
 
 def _validate_shape(shape: Sequence[int]) -> None:
+    """
+    Validate output volume shape.
+
+    Parameters
+    ----------
+    shape : Sequence[int]
+        Volume shape [D, H, W]. All entries must be positive.
+
+    Raises
+    ------
+    ValueError
+        If shape has != 3 elements or contains non-positive dimensions.
+    """
     if len(shape) != 3:
         raise ValueError(f"shape must have 3 elements [D,H,W], got {shape}.")
 
@@ -68,6 +177,18 @@ def _validate_shape(shape: Sequence[int]) -> None:
 
 
 class _GaussianVolumeFunction(Function):
+    """
+    Autograd Function wrapping CUDA kernel for Gaussian volume reconstruction.
+
+    Implements forward and backward passes for the Gaussian mixture volume formula:
+
+        V(x) = Σᵢ wᵢ(x) · fᵢ / (Σᵢ wᵢ(x) + ε)
+        wᵢ(x) = confidenceᵢ · exp(-0.5 · (x - μᵢ)ᵀ Qᵢ (x - μᵢ))
+
+    The forward pass delegates to the JIT-compiled CUDA extension; backward
+    computes gradients w.r.t. means, precision, confidences, and features.
+    """
+
     @staticmethod
     def forward(
         ctx,
@@ -81,6 +202,33 @@ class _GaussianVolumeFunction(Function):
         cutoff_squared: float,
         epsilon: float,
     ) -> Tensor:
+        """
+        Reconstruct volume via CUDA kernel.
+
+        Parameters
+        ----------
+        ctx : Context
+            Autograd context for gradient bookkeeping.
+        means : Tensor
+            [N, 3] Gaussian centers (CUDA float32).
+        precision6 : Tensor
+            [N, 6] Compact precision matrices (CUDA float32).
+        confidences : Tensor
+            [N] Gaussian weights (CUDA float32).
+        features : Tensor
+            [N] Feature values (CUDA float32).
+        depth, height, width : int
+            Output volume shape.
+        cutoff_squared : float
+            Squared cutoff distance (Mahalanobis) in standard deviations.
+        epsilon : float
+            Numerical stability constant.
+
+        Returns
+        -------
+        Tensor
+            Reconstructed volume [D, H, W], dtype float32, on GPU.
+        """
         extension = load_gaussian_volume_extension()
 
         means_c = means.contiguous()
@@ -153,7 +301,7 @@ def reconstruct_volume(
     Gaussians whose mahalanobis distance from a voxel exceeds cutoff_sigma
     standard deviations are ignored for that voxel (both value and gradient).
     """
-    _validate_inputs(means, precision6, confidences, features)
+    _validate_inputs(means, precision6, confidences, features, require_cuda=True)
     _validate_shape(shape)
 
     if cutoff_sigma <= 0:
@@ -189,13 +337,59 @@ def reconstruct_volume_reference(
     voxel_chunk_size: int,
 ) -> Tensor:
     """
-    Pure-PyTorch reference implementation of reconstruct_volume.
+    Pure-PyTorch reference implementation of Gaussian volume reconstruction.
 
-    Used for CPU execution, unit testing, and cross-checking the CUDA
-    extension. Processes voxels in chunks of voxel_chunk_size to bound peak
-    memory usage for large volumes.
+    Reconstructs the volume using NumPy-like operations (einsum, masking, etc.)
+    instead of a compiled CUDA kernel. Fully differentiable but slower than
+    the CUDA version.
+
+    Used for:
+    - CPU execution (when GPU unavailable)
+    - GPU execution (alternative to CUDA kernel, always works)
+    - Unit testing and validation
+    - Cross-checking CUDA kernel correctness
+    - Debugging gradient computation
+
+    Processes voxels in chunks to bound peak memory usage for large volumes.
+
+    Parameters
+    ----------
+    means : Tensor
+        Gaussian centers, shape [N, 3]. Can be on CPU or GPU.
+    precision6 : Tensor
+        Compact precision matrices, shape [N, 6]. Must be on same device as means.
+    confidences : Tensor
+        Gaussian weights, shape [N]. Must be on same device as means.
+    features : Tensor
+        Feature values, shape [N]. Must be on same device as means.
+    shape : Sequence[int]
+        Output volume shape [D, H, W].
+    cutoff_sigma : float
+        Cutoff distance in standard deviations. Gaussians beyond this distance
+        contribute zero weight. Typical: 3.0.
+    epsilon : float
+        Numerical stability constant (added to denominator).
+    voxel_chunk_size : int
+        Process voxels in chunks of this size to limit memory usage.
+        Larger chunks are faster but use more memory. Typical: 65536 (256³/4).
+
+    Returns
+    -------
+    Tensor
+        Reconstructed volume [D, H, W], same dtype/device as inputs.
+
+    Notes
+    -----
+    Implementation:
+    1. Expand Gaussian centers to full 3×3 precision matrices (compact6 → full).
+    2. Create voxel coordinate grid.
+    3. For each chunk of voxels:
+       a. Compute Mahalanobis squared distance from each voxel to each Gaussian.
+       b. Mask out Gaussians beyond cutoff_sigma.
+       c. Compute weights = confidence * exp(-0.5 * distance).
+       d. Blend features: output = Σ(weight * feature) / (Σweight + ε).
     """
-    _validate_inputs(means, precision6, confidences, features)
+    _validate_inputs(means, precision6, confidences, features, require_cuda=False)
     _validate_shape(shape)
 
     if cutoff_sigma <= 0:

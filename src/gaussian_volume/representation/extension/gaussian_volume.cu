@@ -344,8 +344,10 @@ torch::Tensor gaussian_forward_cuda(
     const int64_t N = means.size(0);
     const int64_t voxel_count = depth * height * width;
 
-    auto output = torch::empty({depth, height, width}, means.options());
-    auto denom = torch::empty({voxel_count}, means.options());
+    // Initialize to zero: uninitialized memory (torch::empty) causes garbage values.
+    // Voxels with no nearby Gaussians should output 0, not random data.
+    auto output = torch::zeros({depth, height, width}, means.options());
+    auto denom = torch::zeros({voxel_count}, means.options());
 
     const int64_t blocks = (voxel_count + kThreadsPerBlock - 1) / kThreadsPerBlock;
     cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
@@ -360,6 +362,24 @@ torch::Tensor gaussian_forward_cuda(
         output.data_ptr<float>(),
         denom.data_ptr<float>()
     );
+
+    // Error checking
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("CUDA kernel launch failed: ") +
+            cudaGetErrorString(err)
+        );
+    }
+
+    // Ensure kernel execution completes before returning
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(
+            std::string("CUDA kernel execution failed: ") +
+            cudaGetErrorString(err)
+        );
+    }
 
     return output;
 }
@@ -393,8 +413,8 @@ std::vector<torch::Tensor> gaussian_backward_cuda(
     // cached from the original forward() call (autograd.Function.forward
     // only saves the raw parameters, not the output), so backward derives
     // them itself using the same kernel the public forward uses.
-    auto recomputed_output = torch::empty({depth, height, width}, means.options());
-    auto recomputed_denom = torch::empty({voxel_count}, means.options());
+    auto recomputed_output = torch::zeros({depth, height, width}, means.options());
+    auto recomputed_denom = torch::zeros({voxel_count}, means.options());
 
     const int64_t forward_blocks = (voxel_count + kThreadsPerBlock - 1) / kThreadsPerBlock;
     gaussian_forward_kernel<<<forward_blocks, kThreadsPerBlock, 0, stream>>>(
